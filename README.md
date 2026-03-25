@@ -1,4 +1,4 @@
-# complex_eval
+# Protein_complex_eval
 
 `complex_eval` is a small Python toolkit for evaluating predicted binary protein complexes against ground-truth structures. It supports PDB and mmCIF input, multi-chain receptor/ligand partners, per-sample metrics, and top-1 / best-of-k aggregation.
 
