@@ -13,6 +13,7 @@ from tqdm import tqdm
 
 from .aggregate import write_aggregate_outputs
 from .evaluate import EvaluationConfig, REQUIRED_MANIFEST_COLUMNS, safe_evaluate_record
+from .validation import write_validation_outputs
 
 LOGGER = logging.getLogger("complex_eval")
 
@@ -66,6 +67,53 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Use sequence-based residue matching when numbering-based matching is poor.",
     )
+    parser.add_argument(
+        "--strict_mapping",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Treat low-confidence residue/chain mappings as invalid rows for strict research workflows.",
+    )
+    parser.add_argument(
+        "--min_matched_residue_fraction",
+        type=float,
+        default=0.7,
+        help="Minimum per-side matched residue fraction before a row is flagged as low-confidence.",
+    )
+    parser.add_argument(
+        "--min_sequence_identity",
+        type=float,
+        default=0.5,
+        help="Minimum per-chain sequence identity before a row is flagged as low-confidence.",
+    )
+    parser.add_argument(
+        "--max_chain_length_difference",
+        type=int,
+        default=10,
+        help="Maximum allowed absolute per-chain length difference before a row is flagged as low-confidence.",
+    )
+    parser.add_argument(
+        "--include_failed_rows",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Include failed rows in per_sample_metrics.csv with status/error metadata.",
+    )
+    parser.add_argument(
+        "--include_invalid_rows_in_summary",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Include low-confidence and failed rows in summary statistics instead of filtering to status=success.",
+    )
+    parser.add_argument(
+        "--validation_mode",
+        choices=("none", "dockq"),
+        default="none",
+        help="Optional post-hoc validation against an external reference implementation.",
+    )
+    parser.add_argument(
+        "--dockq_executable",
+        default=None,
+        help="Optional explicit DockQ executable path for --validation_mode dockq.",
+    )
     parser.add_argument("--verbose", action="store_true", help="Enable verbose logging.")
     return parser
 
@@ -97,6 +145,10 @@ def main(argv: Iterable[str] | None = None) -> int:
         include_clashes=args.include_clashes,
         ignore_hydrogens=args.ignore_hydrogens,
         sequence_fallback=args.sequence_fallback,
+        strict_mapping=args.strict_mapping,
+        min_matched_residue_fraction=args.min_matched_residue_fraction,
+        min_sequence_identity=args.min_sequence_identity,
+        max_chain_length_difference=args.max_chain_length_difference,
     )
 
     records = manifest_df.to_dict(orient="records")
@@ -104,19 +156,61 @@ def main(argv: Iterable[str] | None = None) -> int:
     successes, failures = _run_evaluation(records, config=config, manifest_dir=manifest_dir, workers=args.workers)
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    metrics_df = pd.DataFrame(successes)
+    metrics_rows: list[dict[str, object]] = list(successes)
+    if args.include_failed_rows:
+        metrics_rows.extend(failures)
+    metrics_df = pd.DataFrame(metrics_rows)
     failures_df = pd.DataFrame(
         failures,
-        columns=["sample_id", "target_id", "rank", "pred_path", "gt_path", "error", "config"],
+        columns=[
+            "sample_id",
+            "target_id",
+            "rank",
+            "pred_path",
+            "gt_path",
+            "status",
+            "error_type",
+            "error_message",
+            "mapping_low_confidence_reasons",
+            "config",
+        ],
     )
 
     if metrics_df.empty:
         LOGGER.warning("No samples were evaluated successfully.")
-    write_aggregate_outputs(metrics_df=metrics_df, out_dir=out_dir, topk=args.topk)
+    write_aggregate_outputs(
+        metrics_df=metrics_df,
+        out_dir=out_dir,
+        topk=args.topk,
+        include_invalid_rows_in_summary=args.include_invalid_rows_in_summary,
+    )
     failures_df.to_csv(out_dir / "failures.csv", index=False)
+    if args.validation_mode != "none" and not metrics_df.empty:
+        validation_summary = write_validation_outputs(
+            metrics_df=metrics_df,
+            out_dir=out_dir,
+            mode=args.validation_mode,
+            dockq_executable=args.dockq_executable,
+            include_invalid_rows=args.include_invalid_rows_in_summary,
+        )
+        LOGGER.info("Validation summary status: %s", validation_summary.get("status", "unknown"))
 
-    LOGGER.info("Completed: %d succeeded, %d failed", len(successes), len(failures))
-    return 0 if successes else 1
+    low_confidence_count = int(
+        pd.Series([row.get("status", "success") for row in successes]).eq("low_confidence_mapping").sum()
+    )
+    success_count = int(pd.Series([row.get("status", "success") for row in successes]).eq("success").sum())
+
+    LOGGER.info(
+        "Completed: %d success, %d low-confidence, %d failed",
+        success_count,
+        low_confidence_count,
+        len(failures),
+    )
+    if success_count == 0:
+        return 1
+    if args.strict_mapping and low_confidence_count > 0:
+        return 2
+    return 0
 
 
 def _run_evaluation(
@@ -127,31 +221,35 @@ def _run_evaluation(
 ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     """Run evaluation serially or with multiprocessing."""
 
-    successes: list[dict[str, object]] = []
-    failures: list[dict[str, object]] = []
+    successes: list[tuple[int, dict[str, object]]] = []
+    failures: list[tuple[int, dict[str, object]]] = []
 
     if workers <= 1:
-        iterator = (safe_evaluate_record(record, config=config, manifest_dir=manifest_dir) for record in records)
-        for outcome in tqdm(iterator, total=len(records), desc="Evaluating", unit="sample"):
+        iterator = (
+            (index, safe_evaluate_record(record, config=config, manifest_dir=manifest_dir))
+            for index, record in enumerate(records)
+        )
+        for index, outcome in tqdm(iterator, total=len(records), desc="Evaluating", unit="sample"):
             if outcome.ok:
-                successes.append(outcome.metrics or {})
+                successes.append((index, outcome.metrics or {}))
             else:
-                failures.append(outcome.failure or {})
-        return successes, failures
+                failures.append((index, outcome.failure or {}))
+        return _sorted_rows(successes), _sorted_rows(failures)
 
     with ProcessPoolExecutor(max_workers=workers) as executor:
         future_to_sample = {
-            executor.submit(safe_evaluate_record, record, config, manifest_dir): record.get("sample_id", "")
-            for record in records
+            executor.submit(safe_evaluate_record, record, config, manifest_dir): index
+            for index, record in enumerate(records)
         }
         for future in tqdm(as_completed(future_to_sample), total=len(future_to_sample), desc="Evaluating", unit="sample"):
+            index = future_to_sample[future]
             outcome = future.result()
             if outcome.ok:
-                successes.append(outcome.metrics or {})
+                successes.append((index, outcome.metrics or {}))
             else:
-                failures.append(outcome.failure or {})
+                failures.append((index, outcome.failure or {}))
 
-    return successes, failures
+    return _sorted_rows(successes), _sorted_rows(failures)
 
 
 def _validate_manifest_columns(manifest_df: pd.DataFrame) -> None:
@@ -160,6 +258,12 @@ def _validate_manifest_columns(manifest_df: pd.DataFrame) -> None:
     missing = [column for column in REQUIRED_MANIFEST_COLUMNS if column not in manifest_df.columns]
     if missing:
         raise ValueError(f"Manifest is missing required columns: {', '.join(missing)}")
+
+
+def _sorted_rows(rows: list[tuple[int, dict[str, object]]]) -> list[dict[str, object]]:
+    """Return deterministic row ordering by manifest order."""
+
+    return [row for _, row in sorted(rows, key=lambda item: item[0])]
 
 
 if __name__ == "__main__":  # pragma: no cover

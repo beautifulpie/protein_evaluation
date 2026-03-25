@@ -1,6 +1,6 @@
-numpy
-pandas
-scipy
-biopython
-gemmi
-tqdm
+numpy>=1.26,<3
+pandas>=2,<3
+scipy>=1.11,<2
+biopython>=1.83,<2
+gemmi>=0.7.0,<0.8
+tqdm>=4.66,<5

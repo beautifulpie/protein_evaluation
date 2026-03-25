@@ -1,0 +1,18 @@
+[
+  {
+    "sample_id": "identical",
+    "status": "success",
+    "fnat": 1.0,
+    "dockq": 1.0,
+    "num_matched_residues": 5,
+    "matched_residue_fraction": 1.0
+  },
+  {
+    "sample_id": "rigid_transform",
+    "status": "success",
+    "fnat": 1.0,
+    "dockq": 1.0,
+    "num_matched_residues": 5,
+    "matched_residue_fraction": 1.0
+  }
+]

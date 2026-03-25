@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Mapping
@@ -33,6 +34,10 @@ class EvaluationConfig:
     include_clashes: bool = True
     ignore_hydrogens: bool = True
     sequence_fallback: bool = False
+    strict_mapping: bool = True
+    min_matched_residue_fraction: float = 0.7
+    min_sequence_identity: float = 0.5
+    max_chain_length_difference: int = 10
 
 
 @dataclass(frozen=True)
@@ -50,6 +55,9 @@ def validate_manifest_record(record: Mapping[str, object]) -> None:
     missing = [column for column in REQUIRED_MANIFEST_COLUMNS if column not in record]
     if missing:
         raise ValueError(f"Manifest row is missing required columns: {', '.join(missing)}")
+    blank_columns = [column for column in REQUIRED_MANIFEST_COLUMNS if _is_missing_value(record.get(column))]
+    if blank_columns:
+        raise ValueError(f"Manifest row contains blank required values: {', '.join(blank_columns)}")
 
 
 def evaluate_record(
@@ -74,6 +82,11 @@ def evaluate_record(
     if not gt_receptor_chains or not gt_ligand_chains:
         raise ValueError("Ground-truth receptor and ligand chain lists must both be non-empty.")
 
+    try:
+        rank = int(record["rank"])
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Manifest rank must be an integer; received {record['rank']!r}.") from exc
+
     pred_structure = load_structure(pred_path, ignore_hydrogens=config.ignore_hydrogens)
     gt_structure = load_structure(gt_path, ignore_hydrogens=config.ignore_hydrogens)
 
@@ -91,17 +104,25 @@ def evaluate_record(
         include_clashes=config.include_clashes,
         sequence_fallback=config.sequence_fallback,
     )
+    mapping_reasons = _mapping_low_confidence_reasons(metrics, config)
+    status = "low_confidence_mapping" if mapping_reasons else "success"
+    error_type = "LowConfidenceMapping" if mapping_reasons else ""
+    error_message = "; ".join(mapping_reasons)
 
     return {
         "sample_id": str(record["sample_id"]),
         "target_id": str(record["target_id"]),
-        "rank": int(record["rank"]),
+        "rank": rank,
         "pred_path": str(record["pred_path"]),
         "gt_path": str(record["gt_path"]),
         "pred_receptor_chains": ",".join(pred_receptor_chains),
         "pred_ligand_chains": ",".join(pred_ligand_chains),
         "gt_receptor_chains": ",".join(gt_receptor_chains),
         "gt_ligand_chains": ",".join(gt_ligand_chains),
+        "status": status,
+        "error_type": error_type,
+        "error_message": error_message,
+        "mapping_low_confidence_reasons": error_message,
         **metrics,
     }
 
@@ -122,8 +143,56 @@ def safe_evaluate_record(
             "rank": record.get("rank", ""),
             "pred_path": str(record.get("pred_path", "")),
             "gt_path": str(record.get("gt_path", "")),
-            "error": str(exc),
+            "status": "failed",
+            "error_type": type(exc).__name__,
+            "error_message": str(exc),
+            "mapping_low_confidence_reasons": "",
             "config": asdict(config),
         }
         return EvaluationOutcome(ok=False, failure=failure)
     return EvaluationOutcome(ok=True, metrics=metrics)
+
+
+def _is_missing_value(value: object) -> bool:
+    """Return whether a manifest field should be treated as missing."""
+
+    if value is None:
+        return True
+    if isinstance(value, float) and math.isnan(value):
+        return True
+    return str(value).strip() == ""
+
+
+def _mapping_low_confidence_reasons(metrics: Mapping[str, object], config: EvaluationConfig) -> list[str]:
+    """Return explicit reasons for low-confidence residue or chain mapping."""
+
+    reasons: list[str] = []
+    for side_name in ("receptor", "ligand"):
+        matched_fraction = float(metrics.get(f"{side_name}_matched_residue_fraction", math.nan))
+        if not math.isnan(matched_fraction) and matched_fraction < config.min_matched_residue_fraction:
+            reasons.append(
+                f"{side_name}_matched_fraction_below_threshold({matched_fraction:.3f}<"
+                f"{config.min_matched_residue_fraction:.3f})"
+            )
+
+        sequence_identity = float(metrics.get(f"{side_name}_min_chain_sequence_identity", math.nan))
+        if not math.isnan(sequence_identity) and sequence_identity < config.min_sequence_identity:
+            reasons.append(
+                f"{side_name}_sequence_identity_below_threshold({sequence_identity:.3f}<"
+                f"{config.min_sequence_identity:.3f})"
+            )
+
+        length_difference = float(metrics.get(f"{side_name}_max_chain_length_difference", math.nan))
+        if not math.isnan(length_difference) and abs(length_difference) > config.max_chain_length_difference:
+            reasons.append(
+                f"{side_name}_chain_length_difference_above_threshold({int(length_difference)}>"
+                f"{config.max_chain_length_difference})"
+            )
+
+        if (
+            bool(metrics.get(f"{side_name}_used_positional_chain_mapping", False))
+            and int(metrics.get(f"{side_name}_num_chain_pairs", 0)) > 1
+        ):
+            reasons.append(f"{side_name}_multi_chain_positional_mapping")
+
+    return reasons

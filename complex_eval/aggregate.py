@@ -24,9 +24,15 @@ SUMMARY_METRIC_COLUMNS: tuple[str, ...] = (
     "num_native_contacts",
     "num_recovered_contacts",
 )
+VALID_SUMMARY_STATUSES: frozenset[str] = frozenset({"success"})
 
 
-def write_aggregate_outputs(metrics_df: pd.DataFrame, out_dir: str | Path, topk: int) -> None:
+def write_aggregate_outputs(
+    metrics_df: pd.DataFrame,
+    out_dir: str | Path,
+    topk: int,
+    include_invalid_rows_in_summary: bool = False,
+) -> None:
     """Write per-sample outputs and aggregate summaries."""
 
     out_path = Path(out_dir)
@@ -36,16 +42,23 @@ def write_aggregate_outputs(metrics_df: pd.DataFrame, out_dir: str | Path, topk:
     for column, dtype in (("target_id", "object"), ("rank", "float64"), ("sample_id", "object")):
         if column not in ordered_metrics.columns:
             ordered_metrics[column] = pd.Series(dtype=dtype)
-    ordered_metrics = ordered_metrics.sort_values(["target_id", "rank", "sample_id"]).reset_index(drop=True)
+    ordered_metrics["_rank_sort"] = pd.to_numeric(ordered_metrics["rank"], errors="coerce")
+    ordered_metrics = ordered_metrics.sort_values(["target_id", "_rank_sort", "sample_id"]).reset_index(drop=True)
+    ordered_metrics = ordered_metrics.drop(columns=["_rank_sort"], errors="ignore")
     ordered_metrics.to_csv(out_path / "per_sample_metrics.csv", index=False)
 
-    top1_df = select_top1(ordered_metrics)
-    best_of_k_df = select_best_of_k(ordered_metrics, topk=topk)
+    summary_input = _filter_summary_rows(ordered_metrics, include_invalid_rows=include_invalid_rows_in_summary)
+    top1_df = select_top1(summary_input)
+    best_of_k_df = select_best_of_k(summary_input, topk=topk)
 
     best_of_k_df.to_csv(out_path / "per_target_best_of_k.csv", index=False)
 
-    summary_top1 = summarize_subset(top1_df)
-    summary_best_of_k = summarize_subset(best_of_k_df)
+    summary_top1 = summarize_subset(top1_df, all_rows=ordered_metrics, include_invalid_rows=include_invalid_rows_in_summary)
+    summary_best_of_k = summarize_subset(
+        best_of_k_df,
+        all_rows=ordered_metrics,
+        include_invalid_rows=include_invalid_rows_in_summary,
+    )
 
     (out_path / "summary_top1.json").write_text(json.dumps(summary_top1, indent=2), encoding="utf-8")
     (out_path / "summary_best_of_k.json").write_text(json.dumps(summary_best_of_k, indent=2), encoding="utf-8")
@@ -56,7 +69,10 @@ def select_top1(metrics_df: pd.DataFrame) -> pd.DataFrame:
 
     if metrics_df.empty:
         return metrics_df.copy()
-    ordered = metrics_df.sort_values(["target_id", "rank", "sample_id"])
+    ordered = metrics_df.copy()
+    ordered["_rank_sort"] = pd.to_numeric(ordered["rank"], errors="coerce")
+    ordered = ordered.sort_values(["target_id", "_rank_sort", "sample_id"])
+    ordered = ordered.drop(columns=["_rank_sort"], errors="ignore")
     return ordered.groupby("target_id", as_index=False).first()
 
 
@@ -66,7 +82,9 @@ def select_best_of_k(metrics_df: pd.DataFrame, topk: int) -> pd.DataFrame:
     if metrics_df.empty:
         return metrics_df.copy()
 
-    candidates = metrics_df[metrics_df["rank"] <= topk].copy()
+    candidates = metrics_df.copy()
+    candidates["_rank_sort"] = pd.to_numeric(candidates["rank"], errors="coerce")
+    candidates = candidates[candidates["_rank_sort"] <= topk].copy()
     if candidates.empty:
         return candidates
 
@@ -79,14 +97,26 @@ def select_best_of_k(metrics_df: pd.DataFrame, topk: int) -> pd.DataFrame:
         ascending=[True, False, False, True, True, True],
     )
     best = ordered.groupby("target_id", as_index=False).first()
-    return best.drop(columns=["_dockq_sort", "_fnat_sort", "_irmsd_sort"], errors="ignore")
+    return best.drop(columns=["_dockq_sort", "_fnat_sort", "_irmsd_sort", "_rank_sort"], errors="ignore")
 
 
-def summarize_subset(metrics_df: pd.DataFrame) -> dict[str, object]:
+def summarize_subset(
+    metrics_df: pd.DataFrame,
+    all_rows: pd.DataFrame | None = None,
+    include_invalid_rows: bool = False,
+) -> dict[str, object]:
     """Summarize a metrics subset for JSON export."""
 
+    source_rows = all_rows if all_rows is not None else metrics_df
     summary: dict[str, object] = {
         "count": int(len(metrics_df)),
+        "total_rows_seen": int(len(source_rows)),
+        "include_invalid_rows": bool(include_invalid_rows),
+        "status_counts": (
+            source_rows["status"].fillna("success").value_counts().sort_index().to_dict()
+            if "status" in source_rows.columns
+            else {"success": int(len(source_rows))}
+        ),
         "metrics": {},
         "success_rates": {
             "dockq_ge_0_23": _rate(metrics_df, "dockq", lambda series: series >= 0.23),
@@ -137,3 +167,11 @@ def _safe_float(value: object) -> float | None:
     if pd.isna(value):
         return None
     return float(value)
+
+
+def _filter_summary_rows(metrics_df: pd.DataFrame, include_invalid_rows: bool) -> pd.DataFrame:
+    """Filter rows used for summary statistics."""
+
+    if include_invalid_rows or "status" not in metrics_df.columns:
+        return metrics_df.copy()
+    return metrics_df[metrics_df["status"].fillna("success").isin(VALID_SUMMARY_STATUSES)].copy()

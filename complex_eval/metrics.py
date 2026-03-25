@@ -38,6 +38,34 @@ class ResidueMatch:
     gt_chain_id: str
 
 
+@dataclass(frozen=True)
+class ChainMappingResult:
+    """Chain-level mapping metadata for one receptor or ligand side."""
+
+    chain_mapping: list[tuple[str, str]]
+    warnings: list[str]
+    strategy: str
+    used_positional_mapping: bool
+
+
+@dataclass(frozen=True)
+class ChainMatchDiagnostic:
+    """Diagnostics for one matched chain pair."""
+
+    pred_chain_id: str
+    gt_chain_id: str
+    pred_length: int
+    gt_length: int
+    length_difference: int
+    matched_residue_count: int
+    unmatched_gt_residue_count: int
+    unmatched_pred_residue_count: int
+    matched_gt_fraction: float
+    matched_pred_fraction: float
+    sequence_identity: float
+    used_sequence_fallback: bool
+
+
 @dataclass
 class SideMatchResult:
     """Residue matches for one partner side of the binary complex."""
@@ -45,10 +73,13 @@ class SideMatchResult:
     side: str
     chain_mapping: list[tuple[str, str]]
     matched_pairs: list[ResidueMatch] = field(default_factory=list)
+    chain_diagnostics: list[ChainMatchDiagnostic] = field(default_factory=list)
     total_gt_residues: int = 0
     total_pred_residues: int = 0
     total_gt_heavy_atoms: int = 0
     used_sequence_fallback: bool = False
+    chain_mapping_strategy: str = "exact_chain_names"
+    used_positional_chain_mapping: bool = False
     warnings: list[str] = field(default_factory=list)
 
     def gt_to_pred(self) -> dict[ResidueKey, ResidueRecord]:
@@ -85,7 +116,7 @@ class ComplexMatchResult:
         return [*self.receptor.warnings, *self.ligand.warnings]
 
 
-def build_chain_mapping(pred_chain_ids: Iterable[str], gt_chain_ids: Iterable[str]) -> tuple[list[tuple[str, str]], list[str]]:
+def build_chain_mapping(pred_chain_ids: Iterable[str], gt_chain_ids: Iterable[str]) -> ChainMappingResult:
     """Build a chain mapping, preferring exact chain identifiers when possible."""
 
     pred = _deduplicate_chain_ids(pred_chain_ids)
@@ -98,7 +129,12 @@ def build_chain_mapping(pred_chain_ids: Iterable[str], gt_chain_ids: Iterable[st
         raise ValueError("Ground-truth chain list is empty.")
 
     if len(pred) == len(gt) and set(pred) == set(gt):
-        return [(chain_id, chain_id) for chain_id in pred], warnings
+        return ChainMappingResult(
+            chain_mapping=[(chain_id, chain_id) for chain_id in pred],
+            warnings=warnings,
+            strategy="exact_chain_names",
+            used_positional_mapping=False,
+        )
 
     mapping = list(zip(pred, gt))
     if len(pred) != len(gt):
@@ -108,7 +144,12 @@ def build_chain_mapping(pred_chain_ids: Iterable[str], gt_chain_ids: Iterable[st
         )
     elif pred != gt:
         warnings.append("Chain identifiers differ; mapped chains positionally according to manifest order.")
-    return mapping, warnings
+    return ChainMappingResult(
+        chain_mapping=mapping,
+        warnings=warnings,
+        strategy="positional",
+        used_positional_mapping=True,
+    )
 
 
 def match_complex_residues(
@@ -151,15 +192,17 @@ def match_side_residues(
 ) -> SideMatchResult:
     """Match residues for a single partner side."""
 
-    chain_mapping, warnings = build_chain_mapping(pred_chain_ids, gt_chain_ids)
+    chain_mapping_result = build_chain_mapping(pred_chain_ids, gt_chain_ids)
+    warnings = list(chain_mapping_result.warnings)
     total_gt_residues = len(gt_structure.get_residues(gt_chain_ids))
     total_pred_residues = len(pred_structure.get_residues(pred_chain_ids))
     total_gt_heavy_atoms = sum(len(residue.heavy_atoms()) for residue in gt_structure.get_residues(gt_chain_ids))
 
     matched_pairs: list[ResidueMatch] = []
+    chain_diagnostics: list[ChainMatchDiagnostic] = []
     used_sequence_fallback = False
 
-    for pred_chain_id, gt_chain_id in chain_mapping:
+    for pred_chain_id, gt_chain_id in chain_mapping_result.chain_mapping:
         pred_chain = pred_structure.get_chain(pred_chain_id)
         gt_chain = gt_structure.get_chain(gt_chain_id)
         if pred_chain is None:
@@ -170,6 +213,7 @@ def match_side_residues(
             continue
 
         exact_pairs = _match_chain_exact(pred_chain.residues, gt_chain.residues)
+        sequence_pairs: list[tuple[ResidueRecord, ResidueRecord]] = []
         chosen_pairs = exact_pairs
 
         if allow_sequence_fallback:
@@ -186,6 +230,16 @@ def match_side_residues(
                     f"Used sequence-based residue matching for {side} chain pair {pred_chain_id}->{gt_chain_id}."
                 )
 
+        chain_diagnostics.append(
+            _build_chain_match_diagnostic(
+                pred_chain_id=pred_chain_id,
+                gt_chain_id=gt_chain_id,
+                pred_residues=pred_chain.residues,
+                gt_residues=gt_chain.residues,
+                chosen_pairs=chosen_pairs,
+                used_sequence_fallback=chosen_pairs is sequence_pairs and bool(sequence_pairs),
+            )
+        )
         for pred_residue, gt_residue in chosen_pairs:
             matched_pairs.append(
                 ResidueMatch(
@@ -199,12 +253,15 @@ def match_side_residues(
 
     return SideMatchResult(
         side=side,
-        chain_mapping=chain_mapping,
+        chain_mapping=chain_mapping_result.chain_mapping,
         matched_pairs=matched_pairs,
+        chain_diagnostics=chain_diagnostics,
         total_gt_residues=total_gt_residues,
         total_pred_residues=total_pred_residues,
         total_gt_heavy_atoms=total_gt_heavy_atoms,
         used_sequence_fallback=used_sequence_fallback,
+        chain_mapping_strategy=chain_mapping_result.strategy,
+        used_positional_chain_mapping=chain_mapping_result.used_positional_mapping,
         warnings=warnings,
     )
 
@@ -516,6 +573,7 @@ def evaluate_binary_complex(
         "used_ca_fallback_for_lrmsd": used_ca_fallback_for_lrmsd,
         "parse_warning": _merge_warnings(pred_structure.warnings + gt_structure.warnings + match_result.warnings),
     }
+    metrics.update(mapping_diagnostics(match_result))
     return metrics
 
 
@@ -623,6 +681,89 @@ def _should_use_sequence_pairs(
     exact_fraction = len(exact_pairs) / denominator
     sequence_fraction = len(sequence_pairs) / denominator
     return exact_fraction < 0.8 and sequence_fraction > exact_fraction
+
+
+def _build_chain_match_diagnostic(
+    pred_chain_id: str,
+    gt_chain_id: str,
+    pred_residues: list[ResidueRecord],
+    gt_residues: list[ResidueRecord],
+    chosen_pairs: list[tuple[ResidueRecord, ResidueRecord]],
+    used_sequence_fallback: bool,
+) -> ChainMatchDiagnostic:
+    """Summarize matching quality for one mapped chain pair."""
+
+    matched_residue_count = len(chosen_pairs)
+    identical_sequence_codes = sum(
+        pred_residue.sequence_code == gt_residue.sequence_code
+        for pred_residue, gt_residue in chosen_pairs
+    )
+    identity_denominator = max(1, max(len(pred_residues), len(gt_residues)))
+    return ChainMatchDiagnostic(
+        pred_chain_id=pred_chain_id,
+        gt_chain_id=gt_chain_id,
+        pred_length=len(pred_residues),
+        gt_length=len(gt_residues),
+        length_difference=len(pred_residues) - len(gt_residues),
+        matched_residue_count=matched_residue_count,
+        unmatched_gt_residue_count=max(0, len(gt_residues) - matched_residue_count),
+        unmatched_pred_residue_count=max(0, len(pred_residues) - matched_residue_count),
+        matched_gt_fraction=matched_residue_count / max(1, len(gt_residues)),
+        matched_pred_fraction=matched_residue_count / max(1, len(pred_residues)),
+        sequence_identity=identical_sequence_codes / identity_denominator,
+        used_sequence_fallback=used_sequence_fallback,
+    )
+
+
+def mapping_diagnostics(match_result: ComplexMatchResult) -> dict[str, object]:
+    """Return mapping diagnostics and aggregate quality indicators."""
+
+    diagnostics: dict[str, object] = {}
+    min_sequence_identity = 1.0
+    if not match_result.all_pairs:
+        min_sequence_identity = math.nan
+
+    for side_name, side_result in (("receptor", match_result.receptor), ("ligand", match_result.ligand)):
+        matched_count = len(side_result.matched_pairs)
+        unmatched_gt = max(0, side_result.total_gt_residues - matched_count)
+        unmatched_pred = max(0, side_result.total_pred_residues - matched_count)
+        matched_fraction = matched_count / max(1, side_result.total_gt_residues)
+        matched_pred_fraction = matched_count / max(1, side_result.total_pred_residues)
+        chain_length_differences = [diagnostic.length_difference for diagnostic in side_result.chain_diagnostics]
+        sequence_identities = [diagnostic.sequence_identity for diagnostic in side_result.chain_diagnostics]
+        if sequence_identities:
+            min_sequence_identity = min(min_sequence_identity, min(sequence_identities))
+
+        diagnostics.update(
+            {
+                f"{side_name}_num_chain_pairs": len(side_result.chain_mapping),
+                f"{side_name}_num_matched_residues": matched_count,
+                f"{side_name}_num_unmatched_gt_residues": unmatched_gt,
+                f"{side_name}_num_unmatched_pred_residues": unmatched_pred,
+                f"{side_name}_matched_residue_fraction": matched_fraction,
+                f"{side_name}_matched_pred_fraction": matched_pred_fraction,
+                f"{side_name}_min_chain_sequence_identity": min(sequence_identities) if sequence_identities else math.nan,
+                f"{side_name}_max_chain_length_difference": (
+                    max(abs(value) for value in chain_length_differences) if chain_length_differences else math.nan
+                ),
+                f"{side_name}_chain_length_differences": _serialize_chain_length_differences(side_result.chain_diagnostics),
+                f"{side_name}_used_sequence_fallback": side_result.used_sequence_fallback,
+                f"{side_name}_used_positional_chain_mapping": side_result.used_positional_chain_mapping,
+                f"{side_name}_chain_mapping_strategy": side_result.chain_mapping_strategy,
+                f"{side_name}_chain_match_summary": _serialize_chain_match_summary(side_result.chain_diagnostics),
+            }
+        )
+
+    diagnostics["mapping_confidence_score"] = min(
+        value
+        for value in [
+            diagnostics.get("receptor_matched_residue_fraction", math.nan),
+            diagnostics.get("ligand_matched_residue_fraction", math.nan),
+            min_sequence_identity,
+        ]
+        if not math.isnan(float(value))
+    ) if match_result.all_pairs else math.nan
+    return diagnostics
 
 
 def _collect_named_atom_coordinates(
@@ -757,3 +898,28 @@ def _merge_warnings(warnings: Iterable[str]) -> str:
         seen.add(text)
         unique.append(text)
     return " | ".join(unique)
+
+
+def _serialize_chain_length_differences(chain_diagnostics: Iterable[ChainMatchDiagnostic]) -> str:
+    """Serialize chain length deltas to a stable compact string."""
+
+    return ";".join(
+        f"{diagnostic.pred_chain_id}->{diagnostic.gt_chain_id}:{diagnostic.length_difference}"
+        for diagnostic in chain_diagnostics
+    )
+
+
+def _serialize_chain_match_summary(chain_diagnostics: Iterable[ChainMatchDiagnostic]) -> str:
+    """Serialize chain-level matching coverage and sequence identity."""
+
+    return ";".join(
+        (
+            f"{diagnostic.pred_chain_id}->{diagnostic.gt_chain_id}"
+            f":matched={diagnostic.matched_residue_count}"
+            f"/gt={diagnostic.gt_length}"
+            f"/pred={diagnostic.pred_length}"
+            f"/seqid={diagnostic.sequence_identity:.3f}"
+            f"/fallback={int(diagnostic.used_sequence_fallback)}"
+        )
+        for diagnostic in chain_diagnostics
+    )

@@ -1,0 +1,6 @@
+numpy==2.4.2
+pandas==3.0.1
+scipy==1.17.0
+biopython==1.86
+gemmi==0.7.5
+tqdm==4.67.1

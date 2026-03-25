@@ -9,6 +9,24 @@
 - Pure-Python implementations of Kabsch alignment, RMSD metrics, interface residue detection, Fnat, DockQ, lDDT-Cα, and an approximate internal clash metric.
 - Optional sequence-based residue matching fallback when residue numbering does not line up well.
 - Parallel evaluation over a manifest CSV with structured failure reporting.
+- Explicit mapping diagnostics and row status fields so low-confidence mappings are visible instead of silently accepted.
+- Optional validation output against the official DockQ executable when it is available.
+
+## Research Safety
+
+This evaluator is safest for:
+
+- binary complexes with a clear receptor/ligand split
+- structures with consistent chain partitioning between prediction and native reference
+- cases where residue numbering is mostly consistent or sequence fallback is known to be appropriate
+- batch evaluation workflows where rows with `status != success` are filtered out
+
+This evaluator is not yet fully validated for:
+
+- ambiguous multi-chain partner remapping beyond the manifest-provided binary split
+- highly symmetric complexes where multiple chain assignments are equally plausible
+- exact equivalence with every external metric implementation in all edge cases
+- use as the only source of truth in a paper without checking mapping diagnostics and, ideally, external validation
 
 ## Installation
 
@@ -20,6 +38,17 @@ pip install -r requirements.txt
 ```
 
 Python 3.10+ is required.
+
+For reproducible experiments, prefer the exact tested dependency set:
+
+```bash
+pip install -r requirements-pinned.txt
+```
+
+Repository policy:
+
+- `requirements.txt`: supported version ranges for general installation
+- `requirements-pinned.txt`: exact versions used for deterministic experiment reruns and regression reproduction
 
 ## Package Layout
 
@@ -74,6 +103,8 @@ python -m complex_eval.cli \
   --workers 8
 ```
 
+The CLI now defaults to strict mapping mode. Rows with low-confidence residue or chain mappings are marked as `status=low_confidence_mapping`, excluded from summaries by default, and cause a non-zero exit code in strict mode.
+
 Enable sequence-based residue matching fallback explicitly:
 
 ```bash
@@ -82,6 +113,36 @@ python -m complex_eval.cli \
   --out_dir results \
   --workers 4 \
   --sequence_fallback
+```
+
+Disable strict mapping if you want to inspect low-confidence rows without failing the run:
+
+```bash
+python -m complex_eval.cli \
+  --manifest manifest.csv \
+  --out_dir results \
+  --sequence_fallback \
+  --no-strict_mapping
+```
+
+Include failed rows in `per_sample_metrics.csv` and opt in to summaries that include invalid rows:
+
+```bash
+python -m complex_eval.cli \
+  --manifest manifest.csv \
+  --out_dir results \
+  --include_failed_rows \
+  --include_invalid_rows_in_summary
+```
+
+Run external validation against DockQ when the executable is installed:
+
+```bash
+python -m complex_eval.cli \
+  --manifest manifest.csv \
+  --out_dir results \
+  --validation_mode dockq \
+  --dockq_executable DockQ
 ```
 
 Disable optional expensive metrics if needed:
@@ -104,6 +165,8 @@ The CLI writes:
 - `results/summary_top1.json`
 - `results/summary_best_of_k.json`
 - `results/failures.csv`
+- `results/validation_dockq_per_sample.csv` when `--validation_mode dockq`
+- `results/validation_dockq_summary.json` when `--validation_mode dockq`
 
 ### Per-sample CSV columns
 
@@ -112,6 +175,10 @@ Representative columns include:
 - `sample_id`
 - `target_id`
 - `rank`
+- `status`
+- `error_type`
+- `error_message`
+- `mapping_low_confidence_reasons`
 - `ca_rmsd`
 - `all_atom_rmsd`
 - `irmsd`
@@ -125,6 +192,18 @@ Representative columns include:
 - `matched_atom_fraction`
 - `num_matched_residues`
 - `num_matched_atoms`
+- `receptor_num_matched_residues`
+- `ligand_num_matched_residues`
+- `receptor_num_unmatched_gt_residues`
+- `ligand_num_unmatched_gt_residues`
+- `receptor_min_chain_sequence_identity`
+- `ligand_min_chain_sequence_identity`
+- `receptor_max_chain_length_difference`
+- `ligand_max_chain_length_difference`
+- `receptor_chain_mapping_strategy`
+- `ligand_chain_mapping_strategy`
+- `receptor_used_positional_chain_mapping`
+- `ligand_used_positional_chain_mapping`
 - `used_sequence_fallback`
 - `used_ca_fallback_for_irmsd`
 - `used_ca_fallback_for_lrmsd`
@@ -153,6 +232,7 @@ Representative columns include:
 - `summary_top1.json` summarizes the top-ranked sample per target.
 - `summary_best_of_k.json` summarizes the best sample per target among rows with `rank <= topk`.
 - `per_target_best_of_k.csv` stores the selected best-of-k row per target.
+- By default, summaries exclude rows whose `status` is not `success`.
 
 Best-of-k selection uses:
 
@@ -175,13 +255,39 @@ Each JSON summary includes:
 
 - This first version supports binary complex evaluation only: receptor vs ligand.
 - Each side may contain multiple chains, but true multimer interface assignment beyond a binary split is out of scope.
-- If predicted and native chain identifiers differ, chains are matched by manifest order unless the chain ID sets are identical.
+- If predicted and native chain identifiers differ, chains are matched by manifest order unless the chain ID sets are identical. Multi-chain positional remapping is flagged as low-confidence.
 - Residue matching first uses `(chain mapping, residue number, insertion code, residue name)`. Sequence fallback is optional and may reduce effective coverage if the sequences are not cleanly alignable.
 - Alternate locations are reduced to the highest-occupancy altloc per atom name.
 - Hydrogens are ignored by default.
 - Missing atoms and unmatched residues reduce coverage metrics and may trigger `CA` fallback in backbone-based metrics.
 - The internal clash metric is an approximation. It is not an exact MolProbity clashscore and should not be interpreted as one.
+- DockQ validation is optional and currently limited to one-chain-per-side comparisons unless you extend the wrapper for more complex chain-group mappings.
 - External tools such as DockQ or MolProbity are not required and are not used by default.
+
+## Recommended Filtering For Papers
+
+Before using any row in a figure, table, or benchmark summary, check at minimum:
+
+- `status == success`
+- `matched_residue_fraction` is high enough for your benchmark
+- `receptor_matched_residue_fraction` and `ligand_matched_residue_fraction` are both acceptable
+- `receptor_min_chain_sequence_identity` and `ligand_min_chain_sequence_identity` are acceptable when sequence fallback was used
+- `parse_warning` and `mapping_low_confidence_reasons` are empty
+
+A conservative starting filter is:
+
+```text
+status == success
+matched_residue_fraction >= 0.90
+receptor_matched_residue_fraction >= 0.90
+ligand_matched_residue_fraction >= 0.90
+```
+
+If DockQ is available, also inspect `validation_dockq_summary.json` and the per-sample diff file before using the evaluator as a benchmark source in a paper.
+
+## Additional Documentation
+
+- `docs/engineering_report.md`
 
 ## Running Tests
 
