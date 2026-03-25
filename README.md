@@ -289,11 +289,15 @@ The evaluator also writes a lightweight static visualization bundle without addi
 - `results/plots/status_counts.svg`
 - `results/plots/confidence_label_counts.svg`
 - `results/plots/diagnostic_tag_counts.svg`
+- `results/plots/performance_snapshot.svg`
+- `results/plots/method_mean_dockq.svg`
 - `results/plots/mapping_confidence_vs_dockq.svg`
 - `results/plots/interface_precision_vs_recall.svg`
 
 These outputs are designed for benchmark review rather than publication figures. They help surface:
 
+- top-1 and best-of-k prediction performance at a glance
+- method-level mean DockQ when a `method` column is present
 - failure-heavy or low-confidence-heavy runs
 - disagreement between mapping confidence and DockQ
 - interface recall/precision tradeoffs

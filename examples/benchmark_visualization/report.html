@@ -77,13 +77,21 @@
 </head>
 <body>
   <h1>complex_eval diagnostic report</h1>
-  <p>This report is a lightweight visual audit layer over the evaluator outputs. It is intended for benchmark triage, mapping-quality review, and result explainability.</p>
+  <p>This report is a lightweight visual audit layer over the evaluator outputs. It is intended for benchmark triage, mapping-quality review, result explainability, and prediction-performance review.</p>
 
   <div class="cards">
-    <div class="card"><div class="card-title">Top-1 count</div><div class="card-value">12</div></div><div class="card"><div class="card-title">Best-of-k count</div><div class="card-value">12</div></div><div class="card"><div class="card-title">Top-1 mean confidence</div><div class="card-value">0.928</div></div><div class="card"><div class="card-title">Best-of-k mean confidence</div><div class="card-value">0.928</div></div><div class="card"><div class="card-title">Best-of-k mean interface F1</div><div class="card-value">0.977</div></div><div class="card"><div class="card-title">Best-of-k DockQ&gt;=0.23</div><div class="card-value">1.000</div></div>
+    <div class="card"><div class="card-title">Per-sample mean DockQ</div><div class="card-value">0.893</div></div><div class="card"><div class="card-title">Top-1 mean DockQ</div><div class="card-value">0.893</div></div><div class="card"><div class="card-title">Best-of-k mean DockQ</div><div class="card-value">0.893</div></div><div class="card"><div class="card-title">Top-1 DockQ&gt;=0.23</div><div class="card-value">1.000</div></div><div class="card"><div class="card-title">Best-of-k DockQ&gt;=0.23</div><div class="card-value">1.000</div></div><div class="card"><div class="card-title">Best-of-k mean Fnat</div><div class="card-value">0.802</div></div><div class="card"><div class="card-title">Best-of-k mean interface F1</div><div class="card-value">0.977</div></div><div class="card"><div class="card-title">Best-of-k mean confidence</div><div class="card-value">0.928</div></div><div class="card"><div class="card-title">Low-confidence fraction</div><div class="card-value">0.000</div></div>
   </div>
 
   <div class="grid">
+    <div class="panel">
+      <h2>Prediction performance overview</h2>
+      <img src="plots/performance_snapshot.svg" alt="Prediction performance overview" />
+    </div>
+    <div class="panel">
+      <h2>Method mean DockQ</h2>
+      <img src="plots/method_mean_dockq.svg" alt="Method mean DockQ" />
+    </div>
     <div class="panel">
       <h2>Status overview</h2>
       <img src="plots/status_counts.svg" alt="Status counts" />
@@ -104,6 +112,259 @@
       <h2>Diagnostic tag frequency</h2>
       <img src="plots/diagnostic_tag_counts.svg" alt="Diagnostic tag counts" />
     </div>
+  </div>
+
+  <div class="panel">
+    <h2>Benchmark performance summary</h2>
+    <table class="dataframe table">
+  <thead>
+    <tr style="text-align: right;">
+      <th>view</th>
+      <th>count</th>
+      <th>mean_dockq</th>
+      <th>mean_fnat</th>
+      <th>mean_interface_f1</th>
+      <th>mean_mapping_confidence_score</th>
+      <th>success_rate_dockq_ge_0_23</th>
+      <th>success_rate_dockq_ge_0_49</th>
+      <th>success_rate_dockq_ge_0_80</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>per_sample</td>
+      <td>12</td>
+      <td>0.892567</td>
+      <td>0.802083</td>
+      <td>0.976923</td>
+      <td>0.928295</td>
+      <td>1.0</td>
+      <td>0.916667</td>
+      <td>0.75</td>
+    </tr>
+    <tr>
+      <td>top1</td>
+      <td>12</td>
+      <td>0.892567</td>
+      <td>0.802083</td>
+      <td>0.976923</td>
+      <td>0.928295</td>
+      <td>1.0</td>
+      <td>0.916667</td>
+      <td>0.75</td>
+    </tr>
+    <tr>
+      <td>best_of_k</td>
+      <td>12</td>
+      <td>0.892567</td>
+      <td>0.802083</td>
+      <td>0.976923</td>
+      <td>0.928295</td>
+      <td>1.0</td>
+      <td>0.916667</td>
+      <td>0.75</td>
+    </tr>
+  </tbody>
+</table>
+  </div>
+
+  <div class="panel" style="margin-top:18px;">
+    <h2>Top predicted samples</h2>
+    <table class="dataframe table">
+  <thead>
+    <tr style="text-align: right;">
+      <th>sample_id</th>
+      <th>target_id</th>
+      <th>method</th>
+      <th>status</th>
+      <th>dockq</th>
+      <th>fnat</th>
+      <th>interface_f1</th>
+      <th>mapping_confidence_label</th>
+      <th>mapping_confidence_score</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>x001_perfect</td>
+      <td>X001</td>
+      <td>baseline</td>
+      <td>success</td>
+      <td>1.000000</td>
+      <td>1.000</td>
+      <td>1.000000</td>
+      <td>high</td>
+      <td>1.000000</td>
+    </tr>
+    <tr>
+      <td>x002_rigid_transform</td>
+      <td>X002</td>
+      <td>baseline</td>
+      <td>success</td>
+      <td>1.000000</td>
+      <td>1.000</td>
+      <td>1.000000</td>
+      <td>high</td>
+      <td>1.000000</td>
+    </tr>
+    <tr>
+      <td>x007_missing_ligand_residue</td>
+      <td>X007</td>
+      <td>baseline</td>
+      <td>success</td>
+      <td>1.000000</td>
+      <td>1.000</td>
+      <td>1.000000</td>
+      <td>high</td>
+      <td>1.000000</td>
+    </tr>
+    <tr>
+      <td>x010_insertion_code</td>
+      <td>X010</td>
+      <td>drift</td>
+      <td>success</td>
+      <td>1.000000</td>
+      <td>1.000</td>
+      <td>1.000000</td>
+      <td>high</td>
+      <td>1.000000</td>
+    </tr>
+    <tr>
+      <td>x009_extra_receptor_residue</td>
+      <td>X009</td>
+      <td>drift</td>
+      <td>success</td>
+      <td>1.000000</td>
+      <td>1.000</td>
+      <td>1.000000</td>
+      <td>high</td>
+      <td>0.930000</td>
+    </tr>
+    <tr>
+      <td>x005_numbering_offset</td>
+      <td>X005</td>
+      <td>ablation</td>
+      <td>success</td>
+      <td>1.000000</td>
+      <td>1.000</td>
+      <td>1.000000</td>
+      <td>high</td>
+      <td>0.920000</td>
+    </tr>
+    <tr>
+      <td>x006_chain_name_mismatch</td>
+      <td>X006</td>
+      <td>ablation</td>
+      <td>success</td>
+      <td>1.000000</td>
+      <td>1.000</td>
+      <td>1.000000</td>
+      <td>high</td>
+      <td>0.900000</td>
+    </tr>
+    <tr>
+      <td>x008_sparse_atoms</td>
+      <td>X008</td>
+      <td>baseline</td>
+      <td>success</td>
+      <td>1.000000</td>
+      <td>1.000</td>
+      <td>1.000000</td>
+      <td>low</td>
+      <td>0.561539</td>
+    </tr>
+    <tr>
+      <td>x011_false_contacts</td>
+      <td>X011</td>
+      <td>ablation</td>
+      <td>success</td>
+      <td>0.929086</td>
+      <td>1.000</td>
+      <td>1.000000</td>
+      <td>high</td>
+      <td>1.000000</td>
+    </tr>
+    <tr>
+      <td>x012_combined_offset_and_shift</td>
+      <td>X012</td>
+      <td>drift</td>
+      <td>success</td>
+      <td>0.795131</td>
+      <td>0.625</td>
+      <td>0.769231</td>
+      <td>medium</td>
+      <td>0.828000</td>
+    </tr>
+    <tr>
+      <td>x003_mild_ligand_shift</td>
+      <td>X003</td>
+      <td>drift</td>
+      <td>success</td>
+      <td>0.617792</td>
+      <td>0.000</td>
+      <td>NaN</td>
+      <td>high</td>
+      <td>1.000000</td>
+    </tr>
+    <tr>
+      <td>x004_large_ligand_shift</td>
+      <td>X004</td>
+      <td>drift</td>
+      <td>success</td>
+      <td>0.368797</td>
+      <td>0.000</td>
+      <td>NaN</td>
+      <td>high</td>
+      <td>1.000000</td>
+    </tr>
+  </tbody>
+</table>
+  </div>
+
+  <div class="panel" style="margin-top:18px;">
+    <h2>Method performance snapshot</h2>
+    <table class="dataframe table">
+  <thead>
+    <tr style="text-align: right;">
+      <th>method</th>
+      <th>count</th>
+      <th>mean_dockq</th>
+      <th>mean_fnat</th>
+      <th>mean_interface_f1</th>
+      <th>mean_mapping_confidence_score</th>
+      <th>success_rate_dockq_ge_0_23</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>baseline</td>
+      <td>4</td>
+      <td>1.000000</td>
+      <td>1.000</td>
+      <td>1.000000</td>
+      <td>0.890385</td>
+      <td>1.0</td>
+    </tr>
+    <tr>
+      <td>ablation</td>
+      <td>3</td>
+      <td>0.976362</td>
+      <td>1.000</td>
+      <td>1.000000</td>
+      <td>0.940000</td>
+      <td>1.0</td>
+    </tr>
+    <tr>
+      <td>drift</td>
+      <td>5</td>
+      <td>0.756344</td>
+      <td>0.525</td>
+      <td>0.923077</td>
+      <td>0.951600</td>
+      <td>1.0</td>
+    </tr>
+  </tbody>
+</table>
   </div>
 
   <div class="panel">
@@ -183,22 +444,6 @@
       <td>1.0</td>
     </tr>
     <tr>
-      <td>X003</td>
-      <td>1</td>
-      <td>1.000000</td>
-      <td>NaN</td>
-      <td>0.617792</td>
-      <td>1.0</td>
-    </tr>
-    <tr>
-      <td>X004</td>
-      <td>1</td>
-      <td>1.000000</td>
-      <td>NaN</td>
-      <td>0.368797</td>
-      <td>1.0</td>
-    </tr>
-    <tr>
       <td>X005</td>
       <td>1</td>
       <td>0.920000</td>
@@ -260,6 +505,22 @@
       <td>0.828000</td>
       <td>0.769231</td>
       <td>0.795131</td>
+      <td>1.0</td>
+    </tr>
+    <tr>
+      <td>X003</td>
+      <td>1</td>
+      <td>1.000000</td>
+      <td>NaN</td>
+      <td>0.617792</td>
+      <td>1.0</td>
+    </tr>
+    <tr>
+      <td>X004</td>
+      <td>1</td>
+      <td>1.000000</td>
+      <td>NaN</td>
+      <td>0.368797</td>
       <td>1.0</td>
     </tr>
   </tbody>

@@ -28,6 +28,8 @@ def write_visualization_outputs(
     status_counts = _value_counts(all_rows_df, "status", default_value="success")
     confidence_counts = _value_counts(all_rows_df, "mapping_confidence_label")
     tag_counts = _tag_counts(all_rows_df)
+    performance_snapshot = _performance_snapshot(summary_diagnostics)
+    method_mean_dockq = _method_metric_map(summary_diagnostics, metric="mean_dockq")
 
     (plots_dir / "status_counts.svg").write_text(
         _bar_chart_svg(
@@ -53,6 +55,24 @@ def write_visualization_outputs(
             title="Top Diagnostic Tags",
             subtitle="Most frequent explainability tags",
             color="#a85f2f",
+        ),
+        encoding="utf-8",
+    )
+    (plots_dir / "performance_snapshot.svg").write_text(
+        _bar_chart_svg(
+            performance_snapshot,
+            title="Prediction Performance Snapshot",
+            subtitle="Overall benchmark summary",
+            color="#6b46c1",
+        ),
+        encoding="utf-8",
+    )
+    (plots_dir / "method_mean_dockq.svg").write_text(
+        _bar_chart_svg(
+            method_mean_dockq,
+            title="Method Mean DockQ",
+            subtitle="Per-sample method summary" if method_mean_dockq else "No method-stratified summary available.",
+            color="#0f766e",
         ),
         encoding="utf-8",
     )
@@ -91,16 +111,23 @@ def _build_html_report(all_rows_df: pd.DataFrame, summary_diagnostics: dict[str,
     overall = summary_diagnostics.get("overall", {})
     best_of_k = overall.get("best_of_k", {}) if isinstance(overall, dict) else {}
     top1 = overall.get("top1", {}) if isinstance(overall, dict) else {}
+    per_sample = overall.get("per_sample", {}) if isinstance(overall, dict) else {}
     low_confidence_rows = _low_confidence_table(all_rows_df)
     top_targets = _top_target_table(summary_diagnostics)
+    performance_table = _performance_overview_table(summary_diagnostics)
+    method_table = _method_performance_table(summary_diagnostics)
+    top_samples = _top_sample_table(all_rows_df)
 
     cards = [
-        _metric_card("Top-1 count", _fmt(top1.get("count"))),
-        _metric_card("Best-of-k count", _fmt(best_of_k.get("count"))),
-        _metric_card("Top-1 mean confidence", _fmt(top1.get("mean_mapping_confidence_score"))),
-        _metric_card("Best-of-k mean confidence", _fmt(best_of_k.get("mean_mapping_confidence_score"))),
-        _metric_card("Best-of-k mean interface F1", _fmt(best_of_k.get("mean_interface_f1"))),
+        _metric_card("Per-sample mean DockQ", _fmt(per_sample.get("mean_dockq"))),
+        _metric_card("Top-1 mean DockQ", _fmt(top1.get("mean_dockq"))),
+        _metric_card("Best-of-k mean DockQ", _fmt(best_of_k.get("mean_dockq"))),
+        _metric_card("Top-1 DockQ>=0.23", _fmt(top1.get("success_rate_dockq_ge_0_23"))),
         _metric_card("Best-of-k DockQ>=0.23", _fmt(best_of_k.get("success_rate_dockq_ge_0_23"))),
+        _metric_card("Best-of-k mean Fnat", _fmt(_summary_metric(best_of_k, "mean_fnat", "mean_pairwise_fnat_mean"))),
+        _metric_card("Best-of-k mean interface F1", _fmt(best_of_k.get("mean_interface_f1"))),
+        _metric_card("Best-of-k mean confidence", _fmt(best_of_k.get("mean_mapping_confidence_score"))),
+        _metric_card("Low-confidence fraction", _fmt(best_of_k.get("fraction_low_confidence_mapping"))),
     ]
 
     return f"""<!DOCTYPE html>
@@ -182,13 +209,21 @@ def _build_html_report(all_rows_df: pd.DataFrame, summary_diagnostics: dict[str,
 </head>
 <body>
   <h1>complex_eval diagnostic report</h1>
-  <p>This report is a lightweight visual audit layer over the evaluator outputs. It is intended for benchmark triage, mapping-quality review, and result explainability.</p>
+  <p>This report is a lightweight visual audit layer over the evaluator outputs. It is intended for benchmark triage, mapping-quality review, result explainability, and prediction-performance review.</p>
 
   <div class="cards">
     {''.join(cards)}
   </div>
 
   <div class="grid">
+    <div class="panel">
+      <h2>Prediction performance overview</h2>
+      <img src="plots/performance_snapshot.svg" alt="Prediction performance overview" />
+    </div>
+    <div class="panel">
+      <h2>Method mean DockQ</h2>
+      <img src="plots/method_mean_dockq.svg" alt="Method mean DockQ" />
+    </div>
     <div class="panel">
       <h2>Status overview</h2>
       <img src="plots/status_counts.svg" alt="Status counts" />
@@ -209,6 +244,21 @@ def _build_html_report(all_rows_df: pd.DataFrame, summary_diagnostics: dict[str,
       <h2>Diagnostic tag frequency</h2>
       <img src="plots/diagnostic_tag_counts.svg" alt="Diagnostic tag counts" />
     </div>
+  </div>
+
+  <div class="panel">
+    <h2>Benchmark performance summary</h2>
+    {performance_table}
+  </div>
+
+  <div class="panel" style="margin-top:18px;">
+    <h2>Top predicted samples</h2>
+    {top_samples}
+  </div>
+
+  <div class="panel" style="margin-top:18px;">
+    <h2>Method performance snapshot</h2>
+    {method_table}
   </div>
 
   <div class="panel">
@@ -291,8 +341,105 @@ def _top_target_table(summary_diagnostics: dict[str, object]) -> str:
         )
     if not rows:
         return "<p>No target summary available.</p>"
-    frame = pd.DataFrame(rows).sort_values("target_id").head(20)
+    frame = pd.DataFrame(rows).sort_values(
+        by=["mean_dockq", "target_id"],
+        ascending=[False, True],
+        na_position="last",
+    ).head(20)
     return frame.to_html(index=False, classes="table", border=0, escape=True)
+
+
+def _performance_overview_table(summary_diagnostics: dict[str, object]) -> str:
+    """Return a compact benchmark performance table."""
+
+    overall = summary_diagnostics.get("overall", {})
+    if not isinstance(overall, dict) or not overall:
+        return "<p>No performance summary available.</p>"
+
+    rows: list[dict[str, object]] = []
+    for view_name in ("per_sample", "top1", "best_of_k"):
+        metrics = overall.get(view_name)
+        if not isinstance(metrics, dict):
+            continue
+        rows.append(
+            {
+                "view": view_name,
+                "count": metrics.get("count"),
+                "mean_dockq": metrics.get("mean_dockq"),
+                "mean_fnat": _summary_metric(metrics, "mean_fnat", "mean_pairwise_fnat_mean"),
+                "mean_interface_f1": metrics.get("mean_interface_f1"),
+                "mean_mapping_confidence_score": metrics.get("mean_mapping_confidence_score"),
+                "success_rate_dockq_ge_0_23": metrics.get("success_rate_dockq_ge_0_23"),
+                "success_rate_dockq_ge_0_49": metrics.get("success_rate_dockq_ge_0_49"),
+                "success_rate_dockq_ge_0_80": metrics.get("success_rate_dockq_ge_0_80"),
+            }
+        )
+    if not rows:
+        return "<p>No performance summary available.</p>"
+    return pd.DataFrame(rows).to_html(index=False, classes="table", border=0, escape=True)
+
+
+def _method_performance_table(summary_diagnostics: dict[str, object]) -> str:
+    """Return a compact method-level performance table when available."""
+
+    by_method = summary_diagnostics.get("by_method", {})
+    per_sample = by_method.get("per_sample", {}) if isinstance(by_method, dict) else {}
+    if not isinstance(per_sample, dict) or not per_sample:
+        return "<p>No method-stratified summary available.</p>"
+
+    rows: list[dict[str, object]] = []
+    for method_name, metrics in per_sample.items():
+        if not isinstance(metrics, dict):
+            continue
+        rows.append(
+            {
+                "method": method_name,
+                "count": metrics.get("count"),
+                "mean_dockq": metrics.get("mean_dockq"),
+                "mean_fnat": _summary_metric(metrics, "mean_fnat", "mean_pairwise_fnat_mean"),
+                "mean_interface_f1": metrics.get("mean_interface_f1"),
+                "mean_mapping_confidence_score": metrics.get("mean_mapping_confidence_score"),
+                "success_rate_dockq_ge_0_23": metrics.get("success_rate_dockq_ge_0_23"),
+            }
+        )
+    if not rows:
+        return "<p>No method-stratified summary available.</p>"
+    frame = pd.DataFrame(rows).sort_values(
+        by=["mean_dockq", "method"],
+        ascending=[False, True],
+        na_position="last",
+    )
+    return frame.to_html(index=False, classes="table", border=0, escape=True)
+
+
+def _top_sample_table(all_rows_df: pd.DataFrame) -> str:
+    """Return a leaderboard-style sample table by performance."""
+
+    if all_rows_df.empty:
+        return "<p>No rows available.</p>"
+    frame = all_rows_df.copy()
+    for column in ("dockq", "fnat", "interface_f1", "mapping_confidence_score"):
+        if column in frame.columns:
+            frame[column] = pd.to_numeric(frame[column], errors="coerce")
+    columns = [
+        column
+        for column in [
+            "sample_id",
+            "target_id",
+            "method",
+            "status",
+            "dockq",
+            "fnat",
+            "interface_f1",
+            "mapping_confidence_label",
+            "mapping_confidence_score",
+        ]
+        if column in frame.columns
+    ]
+    sort_columns = [column for column in ["dockq", "fnat", "mapping_confidence_score", "sample_id"] if column in frame.columns]
+    ascending = [False, False, False, True][: len(sort_columns)]
+    display = frame[columns].sort_values(by=sort_columns, ascending=ascending, na_position="last").head(20)
+    return display.to_html(index=False, classes="table", border=0, escape=True)
 
 
 def _value_counts(frame: pd.DataFrame, column: str, default_value: str = "") -> dict[str, int]:
@@ -321,7 +468,7 @@ def _tag_counts(frame: pd.DataFrame) -> pd.Series:
     return pd.Series(counts).sort_values(ascending=False)
 
 
-def _bar_chart_svg(data: dict[str, int], title: str, subtitle: str, color: str) -> str:
+def _bar_chart_svg(data: dict[str, float | int], title: str, subtitle: str, color: str) -> str:
     """Render a simple horizontal bar chart as SVG."""
 
     width = 720
@@ -335,7 +482,7 @@ def _bar_chart_svg(data: dict[str, int], title: str, subtitle: str, color: str) 
     if not items:
         return _empty_svg(title, subtitle, "No data available.")
 
-    max_value = max(value for _, value in items) or 1
+    max_value = max(float(value) for _, value in items) or 1
     parts = [
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}">',
         '<rect width="100%" height="100%" fill="#ffffff"/>',
@@ -345,7 +492,8 @@ def _bar_chart_svg(data: dict[str, int], title: str, subtitle: str, color: str) 
 
     for index, (label, value) in enumerate(items):
         y = top_margin + index * bar_height
-        bar_width = 0 if max_value == 0 else int(chart_width * (value / max_value))
+        numeric_value = float(value)
+        bar_width = 0 if max_value == 0 else int(chart_width * (numeric_value / max_value))
         parts.append(
             f'<text x="24" y="{y + 18}" font-size="12" font-family="sans-serif" fill="#111827">{html.escape(label)}</text>'
         )
@@ -353,7 +501,7 @@ def _bar_chart_svg(data: dict[str, int], title: str, subtitle: str, color: str) 
             f'<rect x="{left_margin}" y="{y + 5}" width="{bar_width}" height="16" rx="3" fill="{color}"/>'
         )
         parts.append(
-            f'<text x="{left_margin + bar_width + 8}" y="{y + 18}" font-size="12" font-family="sans-serif" fill="#111827">{value}</text>'
+            f'<text x="{left_margin + bar_width + 8}" y="{y + 18}" font-size="12" font-family="sans-serif" fill="#111827">{html.escape(_fmt(value))}</text>'
         )
     parts.append("</svg>")
     return "".join(parts)
@@ -487,3 +635,74 @@ def _fmt(value: object) -> str:
             return "NA"
         return f"{value:.3f}"
     return str(value)
+
+
+def _performance_snapshot(summary_diagnostics: dict[str, object]) -> dict[str, float]:
+    """Return compact overall performance values for the summary plot."""
+
+    overall = summary_diagnostics.get("overall", {})
+    if not isinstance(overall, dict):
+        return {}
+    best_of_k = overall.get("best_of_k", {}) if isinstance(overall.get("best_of_k"), dict) else {}
+    top1 = overall.get("top1", {}) if isinstance(overall.get("top1"), dict) else {}
+    per_sample = overall.get("per_sample", {}) if isinstance(overall.get("per_sample"), dict) else {}
+    return {
+        "per_sample mean DockQ": _finite_or_zero(per_sample.get("mean_dockq")),
+        "top1 mean DockQ": _finite_or_zero(top1.get("mean_dockq")),
+        "best_of_k mean DockQ": _finite_or_zero(best_of_k.get("mean_dockq")),
+        "best_of_k DockQ>=0.23": _finite_or_zero(best_of_k.get("success_rate_dockq_ge_0_23")),
+        "best_of_k mean Fnat": _finite_or_zero(_summary_metric(best_of_k, "mean_fnat", "mean_pairwise_fnat_mean")),
+        "best_of_k mean interface F1": _finite_or_zero(best_of_k.get("mean_interface_f1")),
+    }
+
+
+def _method_metric_map(summary_diagnostics: dict[str, object], metric: str) -> dict[str, float]:
+    """Return a method-to-metric mapping for plotting."""
+
+    by_method = summary_diagnostics.get("by_method", {})
+    per_sample = by_method.get("per_sample", {}) if isinstance(by_method, dict) else {}
+    if not isinstance(per_sample, dict):
+        return {}
+    items: list[tuple[str, float]] = []
+    for method_name, metrics in per_sample.items():
+        if not isinstance(metrics, dict):
+            continue
+        value = _safe_numeric(metrics.get(metric))
+        if math.isnan(value):
+            continue
+        items.append((str(method_name), value))
+    items.sort(key=lambda item: (-item[1], item[0]))
+    return {name: value for name, value in items}
+
+
+def _summary_metric(summary: dict[str, object], primary_key: str, fallback_key: str) -> object:
+    """Return a summary metric with an explicit fallback."""
+
+    primary_value = summary.get(primary_key)
+    primary_numeric = _safe_numeric(primary_value)
+    if not math.isnan(primary_numeric):
+        return primary_value
+    return summary.get(fallback_key)
+
+
+def _safe_numeric(value: object) -> float:
+    """Return a float or NaN from a summary-like scalar."""
+
+    if value is None:
+        return float("nan")
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return float("nan")
+    if math.isnan(numeric):
+        return float("nan")
+    return numeric
+
+
+def _finite_or_zero(value: object) -> float:
+    """Return a finite float or zero for plotting."""
+
+    numeric = _safe_numeric(value)
+    if math.isnan(numeric):
+        return 0.0
+    return numeric

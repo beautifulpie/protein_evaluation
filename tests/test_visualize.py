@@ -31,12 +31,17 @@ class VisualizationTests(unittest.TestCase):
             self.assertTrue(report_path.exists())
             report_html = report_path.read_text(encoding="utf-8")
             self.assertIn("complex_eval diagnostic report", report_html)
+            self.assertIn("Prediction performance overview", report_html)
+            self.assertIn("Benchmark performance summary", report_html)
+            self.assertIn("Top predicted samples", report_html)
             self.assertIn("plots/status_counts.svg", report_html)
 
             expected_plot_files = [
                 "status_counts.svg",
                 "confidence_label_counts.svg",
                 "diagnostic_tag_counts.svg",
+                "performance_snapshot.svg",
+                "method_mean_dockq.svg",
                 "mapping_confidence_vs_dockq.svg",
                 "interface_precision_vs_recall.svg",
             ]

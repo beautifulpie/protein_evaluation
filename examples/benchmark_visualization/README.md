@@ -10,6 +10,8 @@ Files:
 - `per_sample_metrics.csv`
 - `per_sample_diagnostics.jsonl`
 - `summary_diagnostics.json`
+- `plots/performance_snapshot.svg`
+- `plots/method_mean_dockq.svg`
 - `plots/status_counts.svg`
 - `plots/confidence_label_counts.svg`
 - `plots/diagnostic_tag_counts.svg`
