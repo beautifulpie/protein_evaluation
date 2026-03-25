@@ -306,8 +306,9 @@ A checked-in example visualization bundle is included here:
 - [examples/benchmark_visualization/report.html](/home/jung/protein_evaluation/examples/benchmark_visualization/report.html)
 - [examples/benchmark_visualization/plots/status_counts.svg](/home/jung/protein_evaluation/examples/benchmark_visualization/plots/status_counts.svg)
 - [examples/benchmark_visualization/plots/confidence_label_counts.svg](/home/jung/protein_evaluation/examples/benchmark_visualization/plots/confidence_label_counts.svg)
+- [examples/benchmark_visualization/source/manifest.csv](/home/jung/protein_evaluation/examples/benchmark_visualization/source/manifest.csv)
 
-This example is generated from the deterministic fixture manifest under `tests/fixtures/benchmark/` and is intended as a stable reference for reviewers and repository visitors.
+This bundled example is generated from 12 deterministic toy protein-complex fixtures under `examples/benchmark_visualization/source/`. It is intended as a stable reference for reviewers and repository visitors, not as a substitute for a real external benchmark.
 
 ### `summary_diagnostics.json`
 

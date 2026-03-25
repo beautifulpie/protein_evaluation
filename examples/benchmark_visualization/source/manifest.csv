@@ -1,0 +1,13 @@
+sample_id,target_id,rank,method,pred_path,gt_path,pred_receptor_chains,pred_ligand_chains,gt_receptor_chains,gt_ligand_chains
+x001_perfect,X001,1,baseline,data/X001_pred.pdb,data/X001_native.pdb,A,B,A,B
+x002_rigid_transform,X002,1,baseline,data/X002_pred.pdb,data/X002_native.pdb,A,B,A,B
+x003_mild_ligand_shift,X003,1,drift,data/X003_pred.pdb,data/X003_native.pdb,A,B,A,B
+x004_large_ligand_shift,X004,1,drift,data/X004_pred.pdb,data/X004_native.pdb,A,B,A,B
+x005_numbering_offset,X005,1,ablation,data/X005_pred.pdb,data/X005_native.pdb,A,B,A,B
+x006_chain_name_mismatch,X006,1,ablation,data/X006_pred.pdb,data/X006_native.pdb,X,Y,A,B
+x007_missing_ligand_residue,X007,1,baseline,data/X007_pred.pdb,data/X007_native.pdb,A,B,A,B
+x008_sparse_atoms,X008,1,baseline,data/X008_pred.pdb,data/X008_native.pdb,A,B,A,B
+x009_extra_receptor_residue,X009,1,drift,data/X009_pred.pdb,data/X009_native.pdb,A,B,A,B
+x010_insertion_code,X010,1,drift,data/X010_pred.pdb,data/X010_native.pdb,A,B,A,B
+x011_false_contacts,X011,1,ablation,data/X011_pred.pdb,data/X011_native.pdb,A,B,A,B
+x012_combined_offset_and_shift,X012,1,drift,data/X012_pred.pdb,data/X012_native.pdb,X,Y,A,B

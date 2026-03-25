@@ -80,7 +80,7 @@
   <p>This report is a lightweight visual audit layer over the evaluator outputs. It is intended for benchmark triage, mapping-quality review, and result explainability.</p>
 
   <div class="cards">
-    <div class="card"><div class="card-title">Top-1 count</div><div class="card-value">2</div></div><div class="card"><div class="card-title">Best-of-k count</div><div class="card-value">2</div></div><div class="card"><div class="card-title">Top-1 mean confidence</div><div class="card-value">1.000</div></div><div class="card"><div class="card-title">Best-of-k mean confidence</div><div class="card-value">1.000</div></div><div class="card"><div class="card-title">Best-of-k mean interface F1</div><div class="card-value">1.000</div></div><div class="card"><div class="card-title">Best-of-k DockQ&gt;=0.23</div><div class="card-value">1.000</div></div>
+    <div class="card"><div class="card-title">Top-1 count</div><div class="card-value">12</div></div><div class="card"><div class="card-title">Best-of-k count</div><div class="card-value">12</div></div><div class="card"><div class="card-title">Top-1 mean confidence</div><div class="card-value">0.928</div></div><div class="card"><div class="card-title">Best-of-k mean confidence</div><div class="card-value">0.928</div></div><div class="card"><div class="card-title">Best-of-k mean interface F1</div><div class="card-value">0.977</div></div><div class="card"><div class="card-title">Best-of-k DockQ&gt;=0.23</div><div class="card-value">1.000</div></div>
   </div>
 
   <div class="grid">
@@ -108,7 +108,48 @@
 
   <div class="panel">
     <h2>Low-confidence or failed rows</h2>
-    <p>No low-confidence or failed rows.</p>
+    <table class="dataframe table">
+  <thead>
+    <tr style="text-align: right;">
+      <th>sample_id</th>
+      <th>target_id</th>
+      <th>method</th>
+      <th>status</th>
+      <th>mapping_confidence_label</th>
+      <th>mapping_confidence_score</th>
+      <th>dockq</th>
+      <th>fnat</th>
+      <th>diagnostic_tags</th>
+      <th>error_message</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>x008_sparse_atoms</td>
+      <td>X008</td>
+      <td>baseline</td>
+      <td>success</td>
+      <td>low</td>
+      <td>0.561539</td>
+      <td>1.000000</td>
+      <td>1.000</td>
+      <td>sparse_atom_coverage;used_ca_fallback_irmsd;used_ca_fallback_lrmsd</td>
+      <td></td>
+    </tr>
+    <tr>
+      <td>x012_combined_offset_and_shift</td>
+      <td>X012</td>
+      <td>drift</td>
+      <td>success</td>
+      <td>medium</td>
+      <td>0.828000</td>
+      <td>0.795131</td>
+      <td>0.625</td>
+      <td>used_sequence_fallback;parse_warning_present;partial_interface_observed;likely_numbering_offset</td>
+      <td></td>
+    </tr>
+  </tbody>
+</table>
   </div>
 
   <div class="panel" style="margin-top:18px;">
@@ -126,19 +167,99 @@
   </thead>
   <tbody>
     <tr>
-      <td>T001</td>
+      <td>X001</td>
       <td>1</td>
-      <td>1.0</td>
-      <td>1.0</td>
-      <td>1.0</td>
+      <td>1.000000</td>
+      <td>1.000000</td>
+      <td>1.000000</td>
       <td>1.0</td>
     </tr>
     <tr>
-      <td>T002</td>
+      <td>X002</td>
       <td>1</td>
+      <td>1.000000</td>
+      <td>1.000000</td>
+      <td>1.000000</td>
       <td>1.0</td>
+    </tr>
+    <tr>
+      <td>X003</td>
+      <td>1</td>
+      <td>1.000000</td>
+      <td>NaN</td>
+      <td>0.617792</td>
       <td>1.0</td>
+    </tr>
+    <tr>
+      <td>X004</td>
+      <td>1</td>
+      <td>1.000000</td>
+      <td>NaN</td>
+      <td>0.368797</td>
       <td>1.0</td>
+    </tr>
+    <tr>
+      <td>X005</td>
+      <td>1</td>
+      <td>0.920000</td>
+      <td>1.000000</td>
+      <td>1.000000</td>
+      <td>1.0</td>
+    </tr>
+    <tr>
+      <td>X006</td>
+      <td>1</td>
+      <td>0.900000</td>
+      <td>1.000000</td>
+      <td>1.000000</td>
+      <td>1.0</td>
+    </tr>
+    <tr>
+      <td>X007</td>
+      <td>1</td>
+      <td>1.000000</td>
+      <td>1.000000</td>
+      <td>1.000000</td>
+      <td>1.0</td>
+    </tr>
+    <tr>
+      <td>X008</td>
+      <td>1</td>
+      <td>0.561539</td>
+      <td>1.000000</td>
+      <td>1.000000</td>
+      <td>1.0</td>
+    </tr>
+    <tr>
+      <td>X009</td>
+      <td>1</td>
+      <td>0.930000</td>
+      <td>1.000000</td>
+      <td>1.000000</td>
+      <td>1.0</td>
+    </tr>
+    <tr>
+      <td>X010</td>
+      <td>1</td>
+      <td>1.000000</td>
+      <td>1.000000</td>
+      <td>1.000000</td>
+      <td>1.0</td>
+    </tr>
+    <tr>
+      <td>X011</td>
+      <td>1</td>
+      <td>1.000000</td>
+      <td>1.000000</td>
+      <td>0.929086</td>
+      <td>1.0</td>
+    </tr>
+    <tr>
+      <td>X012</td>
+      <td>1</td>
+      <td>0.828000</td>
+      <td>0.769231</td>
+      <td>0.795131</td>
       <td>1.0</td>
     </tr>
   </tbody>
