@@ -121,6 +121,9 @@ def evaluate_multimer_complex(
         "dockq_acceptable": False,
         "dockq_medium": False,
         "dockq_high": False,
+        "dockq_decomposition_fnat_term": math.nan,
+        "dockq_decomposition_irmsd_term": math.nan,
+        "dockq_decomposition_lrmsd_term": math.nan,
         "lddt_ca": compute_lddt_ca(match_collection) if include_lddt else math.nan,
         "clash_count": clash_count,
         "clashes_per_1000_atoms": clashes_per_1000_atoms,
@@ -146,6 +149,14 @@ def evaluate_multimer_complex(
         "pairwise_dockq_mean": pairwise_summary["pairwise_dockq_mean"],
         "pairwise_dockq_min": pairwise_summary["pairwise_dockq_min"],
         "pairwise_dockq_acceptable_fraction": pairwise_summary["pairwise_dockq_acceptable_fraction"],
+        "interface_native_contact_count": pairwise_summary["total_native_contacts"],
+        "interface_pred_contact_count": pairwise_summary["total_pred_contacts"],
+        "interface_recovered_contact_count": pairwise_summary["total_recovered_contacts"],
+        "interface_missing_contact_count": pairwise_summary["total_missing_contacts"],
+        "interface_false_contact_count": pairwise_summary["total_false_contacts"],
+        "interface_precision": pairwise_summary["overall_interface_precision"],
+        "interface_recall": pairwise_summary["overall_interface_recall"],
+        "interface_f1": pairwise_summary["overall_interface_f1"],
         "pairwise_interface_metrics_json": json.dumps(
             _json_safe_rows(pairwise_rows),
             sort_keys=True,
@@ -196,6 +207,14 @@ def _evaluate_pairwise_interfaces(
                     "dockq": pair_metrics["dockq"],
                     "num_native_contacts": pair_metrics["num_native_contacts"],
                     "num_recovered_contacts": pair_metrics["num_recovered_contacts"],
+                    "interface_native_contact_count": pair_metrics["interface_native_contact_count"],
+                    "interface_pred_contact_count": pair_metrics["interface_pred_contact_count"],
+                    "interface_recovered_contact_count": pair_metrics["interface_recovered_contact_count"],
+                    "interface_missing_contact_count": pair_metrics["interface_missing_contact_count"],
+                    "interface_false_contact_count": pair_metrics["interface_false_contact_count"],
+                    "interface_precision": pair_metrics["interface_precision"],
+                    "interface_recall": pair_metrics["interface_recall"],
+                    "interface_f1": pair_metrics["interface_f1"],
                     "used_ca_fallback_for_irmsd": pair_metrics["used_ca_fallback_for_irmsd"],
                     "used_ca_fallback_for_lrmsd": pair_metrics["used_ca_fallback_for_lrmsd"],
                     "mapping_confidence_score": pair_metrics.get("mapping_confidence_score", math.nan),
@@ -210,7 +229,27 @@ def _summarize_pairwise_rows(pairwise_rows: Iterable[dict[str, object]]) -> dict
     rows = list(pairwise_rows)
     total_native_contacts = sum(int(row.get("num_native_contacts", 0) or 0) for row in rows)
     total_recovered_contacts = sum(int(row.get("num_recovered_contacts", 0) or 0) for row in rows)
+    total_pred_contacts = sum(int(row.get("interface_pred_contact_count", 0) or 0) for row in rows)
+    total_missing_contacts = sum(int(row.get("interface_missing_contact_count", 0) or 0) for row in rows)
+    total_false_contacts = sum(int(row.get("interface_false_contact_count", 0) or 0) for row in rows)
     overall_fnat = total_recovered_contacts / total_native_contacts if total_native_contacts > 0 else math.nan
+    overall_interface_precision = (
+        total_recovered_contacts / total_pred_contacts if total_pred_contacts > 0 else math.nan
+    )
+    overall_interface_recall = (
+        total_recovered_contacts / total_native_contacts if total_native_contacts > 0 else math.nan
+    )
+    if (
+        math.isnan(overall_interface_precision)
+        or math.isnan(overall_interface_recall)
+        or overall_interface_precision + overall_interface_recall == 0.0
+    ):
+        overall_interface_f1 = math.nan
+    else:
+        overall_interface_f1 = (
+            2.0 * overall_interface_precision * overall_interface_recall
+            / (overall_interface_precision + overall_interface_recall)
+        )
 
     pairwise_dockq_values = _finite_values(row.get("dockq") for row in rows)
     pairwise_fnat_values = _finite_values(row.get("fnat") for row in rows)
@@ -220,7 +259,13 @@ def _summarize_pairwise_rows(pairwise_rows: Iterable[dict[str, object]]) -> dict
     return {
         "total_native_contacts": total_native_contacts,
         "total_recovered_contacts": total_recovered_contacts,
+        "total_pred_contacts": total_pred_contacts,
+        "total_missing_contacts": total_missing_contacts,
+        "total_false_contacts": total_false_contacts,
         "overall_fnat": overall_fnat,
+        "overall_interface_precision": overall_interface_precision,
+        "overall_interface_recall": overall_interface_recall,
+        "overall_interface_f1": overall_interface_f1,
         "interfaces_with_native_contacts": sum(int(row.get("num_native_contacts", 0) or 0) > 0 for row in rows),
         "pairwise_fnat_mean": _mean_or_nan(pairwise_fnat_values),
         "pairwise_irmsd_mean": _mean_or_nan(pairwise_irmsd_values),
@@ -277,6 +322,7 @@ def _aggregate_group_mapping(group_results: Iterable[SideMatchResult]) -> dict[s
     ]
     finite_candidates = [value for value in mapping_confidence_candidates if not math.isnan(value)]
 
+    confidence_floor = min(finite_candidates) if finite_candidates else math.nan
     return {
         "group_num_matched_residues": sum(len(result.matched_pairs) for result in results),
         "group_num_unmatched_gt_residues": sum(
@@ -297,7 +343,8 @@ def _aggregate_group_mapping(group_results: Iterable[SideMatchResult]) -> dict[s
             result.used_positional_chain_mapping for result in results
         ),
         "group_mapping_summary": ";".join(summaries),
-        "mapping_confidence_score": min(finite_candidates) if finite_candidates else math.nan,
+        "mapping_confidence_score": confidence_floor,
+        "mapping_confidence_floor_signal": confidence_floor,
     }
 
 

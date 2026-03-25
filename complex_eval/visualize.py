@@ -1,0 +1,489 @@
+"""Lightweight deterministic visualization outputs for evaluation results."""
+
+from __future__ import annotations
+
+import html
+import math
+from pathlib import Path
+
+import pandas as pd
+
+
+def write_visualization_outputs(
+    all_rows_df: pd.DataFrame,
+    summary_diagnostics: dict[str, object],
+    out_dir: str | Path,
+) -> None:
+    """Write a lightweight HTML report and SVG plots.
+
+    The visualization layer intentionally avoids heavyweight plotting
+    dependencies. Outputs are static, deterministic, and reviewable in git
+    artifacts or benchmark folders.
+    """
+
+    out_path = Path(out_dir)
+    plots_dir = out_path / "plots"
+    plots_dir.mkdir(parents=True, exist_ok=True)
+
+    status_counts = _value_counts(all_rows_df, "status", default_value="success")
+    confidence_counts = _value_counts(all_rows_df, "mapping_confidence_label")
+    tag_counts = _tag_counts(all_rows_df)
+
+    (plots_dir / "status_counts.svg").write_text(
+        _bar_chart_svg(
+            status_counts,
+            title="Row Status Counts",
+            subtitle="All evaluated rows",
+            color="#2f5aa8",
+        ),
+        encoding="utf-8",
+    )
+    (plots_dir / "confidence_label_counts.svg").write_text(
+        _bar_chart_svg(
+            confidence_counts,
+            title="Mapping Confidence Labels",
+            subtitle="All evaluated rows",
+            color="#3f8f5f",
+        ),
+        encoding="utf-8",
+    )
+    (plots_dir / "diagnostic_tag_counts.svg").write_text(
+        _bar_chart_svg(
+            tag_counts.head(10).to_dict(),
+            title="Top Diagnostic Tags",
+            subtitle="Most frequent explainability tags",
+            color="#a85f2f",
+        ),
+        encoding="utf-8",
+    )
+    (plots_dir / "mapping_confidence_vs_dockq.svg").write_text(
+        _scatter_svg(
+            frame=all_rows_df,
+            x_column="mapping_confidence_score",
+            y_column="dockq",
+            title="Mapping Confidence vs DockQ",
+            x_label="mapping_confidence_score",
+            y_label="dockq",
+            color_column="status",
+        ),
+        encoding="utf-8",
+    )
+    (plots_dir / "interface_precision_vs_recall.svg").write_text(
+        _scatter_svg(
+            frame=all_rows_df,
+            x_column="interface_recall",
+            y_column="interface_precision",
+            title="Interface Recall vs Precision",
+            x_label="interface_recall",
+            y_label="interface_precision",
+            color_column="mapping_confidence_label",
+        ),
+        encoding="utf-8",
+    )
+
+    report_html = _build_html_report(all_rows_df, summary_diagnostics)
+    (out_path / "report.html").write_text(report_html, encoding="utf-8")
+
+
+def _build_html_report(all_rows_df: pd.DataFrame, summary_diagnostics: dict[str, object]) -> str:
+    """Build a static HTML visualization report."""
+
+    overall = summary_diagnostics.get("overall", {})
+    best_of_k = overall.get("best_of_k", {}) if isinstance(overall, dict) else {}
+    top1 = overall.get("top1", {}) if isinstance(overall, dict) else {}
+    low_confidence_rows = _low_confidence_table(all_rows_df)
+    top_targets = _top_target_table(summary_diagnostics)
+
+    cards = [
+        _metric_card("Top-1 count", _fmt(top1.get("count"))),
+        _metric_card("Best-of-k count", _fmt(best_of_k.get("count"))),
+        _metric_card("Top-1 mean confidence", _fmt(top1.get("mean_mapping_confidence_score"))),
+        _metric_card("Best-of-k mean confidence", _fmt(best_of_k.get("mean_mapping_confidence_score"))),
+        _metric_card("Best-of-k mean interface F1", _fmt(best_of_k.get("mean_interface_f1"))),
+        _metric_card("Best-of-k DockQ>=0.23", _fmt(best_of_k.get("success_rate_dockq_ge_0_23"))),
+    ]
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>complex_eval report</title>
+  <style>
+    body {{
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      margin: 24px;
+      color: #18202a;
+      background: #f7f8fb;
+    }}
+    h1, h2 {{ margin: 0 0 12px 0; }}
+    p {{ margin: 8px 0 16px 0; }}
+    .cards {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 12px;
+      margin: 16px 0 24px 0;
+    }}
+    .card {{
+      background: white;
+      border: 1px solid #d6dbe4;
+      border-radius: 10px;
+      padding: 14px;
+    }}
+    .card-title {{
+      font-size: 12px;
+      color: #566577;
+      margin-bottom: 8px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }}
+    .card-value {{
+      font-size: 24px;
+      font-weight: 700;
+    }}
+    .grid {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+      gap: 18px;
+      margin: 18px 0 24px 0;
+    }}
+    .panel {{
+      background: white;
+      border: 1px solid #d6dbe4;
+      border-radius: 10px;
+      padding: 14px;
+    }}
+    img {{
+      width: 100%;
+      border: 1px solid #eef1f5;
+      border-radius: 8px;
+      background: #fff;
+    }}
+    table {{
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+      background: white;
+    }}
+    th, td {{
+      text-align: left;
+      padding: 8px 10px;
+      border-bottom: 1px solid #e5e8ee;
+      vertical-align: top;
+    }}
+    th {{
+      background: #f2f4f8;
+    }}
+    code {{
+      background: #eef2f8;
+      padding: 1px 4px;
+      border-radius: 4px;
+    }}
+  </style>
+</head>
+<body>
+  <h1>complex_eval diagnostic report</h1>
+  <p>This report is a lightweight visual audit layer over the evaluator outputs. It is intended for benchmark triage, mapping-quality review, and result explainability.</p>
+
+  <div class="cards">
+    {''.join(cards)}
+  </div>
+
+  <div class="grid">
+    <div class="panel">
+      <h2>Status overview</h2>
+      <img src="plots/status_counts.svg" alt="Status counts" />
+    </div>
+    <div class="panel">
+      <h2>Confidence labels</h2>
+      <img src="plots/confidence_label_counts.svg" alt="Confidence labels" />
+    </div>
+    <div class="panel">
+      <h2>Mapping confidence vs DockQ</h2>
+      <img src="plots/mapping_confidence_vs_dockq.svg" alt="Mapping confidence vs DockQ" />
+    </div>
+    <div class="panel">
+      <h2>Interface recall vs precision</h2>
+      <img src="plots/interface_precision_vs_recall.svg" alt="Interface recall vs precision" />
+    </div>
+    <div class="panel">
+      <h2>Diagnostic tag frequency</h2>
+      <img src="plots/diagnostic_tag_counts.svg" alt="Diagnostic tag counts" />
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Low-confidence or failed rows</h2>
+    {low_confidence_rows}
+  </div>
+
+  <div class="panel" style="margin-top:18px;">
+    <h2>Per-target summary snapshot</h2>
+    {top_targets}
+  </div>
+</body>
+</html>
+"""
+
+
+def _metric_card(title: str, value: str) -> str:
+    """Return a simple HTML metric card."""
+
+    return (
+        f'<div class="card"><div class="card-title">{html.escape(title)}</div>'
+        f'<div class="card-value">{html.escape(value)}</div></div>'
+    )
+
+
+def _low_confidence_table(all_rows_df: pd.DataFrame) -> str:
+    """Return an HTML table of the most important problematic rows."""
+
+    if all_rows_df.empty:
+        return "<p>No rows available.</p>"
+    frame = all_rows_df.copy()
+    status = frame["status"].fillna("success") if "status" in frame.columns else pd.Series("success", index=frame.index)
+    confidence = pd.to_numeric(frame.get("mapping_confidence_score"), errors="coerce")
+    mask = status.ne("success") | confidence.lt(0.85)
+    filtered = frame[mask].copy()
+    if filtered.empty:
+        return "<p>No low-confidence or failed rows.</p>"
+    columns = [
+        column
+        for column in [
+            "sample_id",
+            "target_id",
+            "method",
+            "status",
+            "mapping_confidence_label",
+            "mapping_confidence_score",
+            "dockq",
+            "fnat",
+            "diagnostic_tags",
+            "error_message",
+        ]
+        if column in filtered.columns
+    ]
+    display = filtered[columns].sort_values(
+        by=[column for column in ["status", "mapping_confidence_score", "sample_id"] if column in filtered.columns],
+        ascending=[True, True, True][: len([column for column in ["status", "mapping_confidence_score", "sample_id"] if column in filtered.columns])],
+    ).head(25)
+    return display.to_html(index=False, classes="table", border=0, escape=True)
+
+
+def _top_target_table(summary_diagnostics: dict[str, object]) -> str:
+    """Return a compact per-target summary table."""
+
+    by_target = summary_diagnostics.get("by_target_id", {})
+    if not isinstance(by_target, dict) or not by_target:
+        return "<p>No target summary available.</p>"
+    rows: list[dict[str, object]] = []
+    for target_id, metrics in by_target.items():
+        if not isinstance(metrics, dict):
+            continue
+        rows.append(
+            {
+                "target_id": target_id,
+                "count": metrics.get("count"),
+                "mean_mapping_confidence_score": metrics.get("mean_mapping_confidence_score"),
+                "mean_interface_f1": metrics.get("mean_interface_f1"),
+                "mean_dockq": metrics.get("mean_dockq"),
+                "success_rate_dockq_ge_0_23": metrics.get("success_rate_dockq_ge_0_23"),
+            }
+        )
+    if not rows:
+        return "<p>No target summary available.</p>"
+    frame = pd.DataFrame(rows).sort_values("target_id").head(20)
+    return frame.to_html(index=False, classes="table", border=0, escape=True)
+
+
+def _value_counts(frame: pd.DataFrame, column: str, default_value: str = "") -> dict[str, int]:
+    """Return stable value counts for a string column."""
+
+    if column not in frame.columns or frame.empty:
+        return {}
+    values = frame[column].fillna(default_value).astype(str).str.strip()
+    if default_value:
+        values = values.replace("", default_value)
+    counts = values.value_counts().sort_index()
+    return {str(key): int(value) for key, value in counts.items() if str(key) != ""}
+
+
+def _tag_counts(frame: pd.DataFrame) -> pd.Series:
+    """Return counts of semicolon-delimited diagnostic tags."""
+
+    if "diagnostic_tags" not in frame.columns or frame.empty:
+        return pd.Series(dtype="int64")
+    counts: dict[str, int] = {}
+    for text in frame["diagnostic_tags"].fillna("").astype(str):
+        for tag in [item.strip() for item in text.split(";") if item.strip()]:
+            counts[tag] = counts.get(tag, 0) + 1
+    if not counts:
+        return pd.Series(dtype="int64")
+    return pd.Series(counts).sort_values(ascending=False)
+
+
+def _bar_chart_svg(data: dict[str, int], title: str, subtitle: str, color: str) -> str:
+    """Render a simple horizontal bar chart as SVG."""
+
+    width = 720
+    bar_height = 28
+    top_margin = 70
+    left_margin = 170
+    chart_width = width - left_margin - 40
+    items = list(data.items())
+    height = max(180, top_margin + 30 + bar_height * max(1, len(items)))
+
+    if not items:
+        return _empty_svg(title, subtitle, "No data available.")
+
+    max_value = max(value for _, value in items) or 1
+    parts = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}">',
+        '<rect width="100%" height="100%" fill="#ffffff"/>',
+        f'<text x="24" y="30" font-size="22" font-family="sans-serif" fill="#1f2937">{html.escape(title)}</text>',
+        f'<text x="24" y="52" font-size="12" font-family="sans-serif" fill="#6b7280">{html.escape(subtitle)}</text>',
+    ]
+
+    for index, (label, value) in enumerate(items):
+        y = top_margin + index * bar_height
+        bar_width = 0 if max_value == 0 else int(chart_width * (value / max_value))
+        parts.append(
+            f'<text x="24" y="{y + 18}" font-size="12" font-family="sans-serif" fill="#111827">{html.escape(label)}</text>'
+        )
+        parts.append(
+            f'<rect x="{left_margin}" y="{y + 5}" width="{bar_width}" height="16" rx="3" fill="{color}"/>'
+        )
+        parts.append(
+            f'<text x="{left_margin + bar_width + 8}" y="{y + 18}" font-size="12" font-family="sans-serif" fill="#111827">{value}</text>'
+        )
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+def _scatter_svg(
+    frame: pd.DataFrame,
+    x_column: str,
+    y_column: str,
+    title: str,
+    x_label: str,
+    y_label: str,
+    color_column: str,
+) -> str:
+    """Render a simple scatter plot as SVG."""
+
+    width = 720
+    height = 420
+    left = 70
+    right = 30
+    top = 60
+    bottom = 55
+    plot_width = width - left - right
+    plot_height = height - top - bottom
+
+    if frame.empty or x_column not in frame.columns or y_column not in frame.columns:
+        return _empty_svg(title, f"{x_label} vs {y_label}", "No data available.")
+
+    x = pd.to_numeric(frame[x_column], errors="coerce")
+    y = pd.to_numeric(frame[y_column], errors="coerce")
+    valid = frame.assign(_x=x, _y=y).dropna(subset=["_x", "_y"]).copy()
+    if valid.empty:
+        return _empty_svg(title, f"{x_label} vs {y_label}", "No plottable points.")
+
+    x_values = valid["_x"].astype(float)
+    y_values = valid["_y"].astype(float)
+    x_min, x_max = _axis_bounds(x_values.tolist())
+    y_min, y_max = _axis_bounds(y_values.tolist())
+
+    palette = {
+        "success": "#2563eb",
+        "low_confidence_mapping": "#d97706",
+        "failed": "#dc2626",
+        "high": "#2563eb",
+        "medium": "#d97706",
+        "low": "#dc2626",
+    }
+
+    parts = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}">',
+        '<rect width="100%" height="100%" fill="#ffffff"/>',
+        f'<text x="24" y="30" font-size="22" font-family="sans-serif" fill="#1f2937">{html.escape(title)}</text>',
+        f'<text x="24" y="50" font-size="12" font-family="sans-serif" fill="#6b7280">{html.escape(x_label)} vs {html.escape(y_label)}</text>',
+        f'<line x1="{left}" y1="{top + plot_height}" x2="{left + plot_width}" y2="{top + plot_height}" stroke="#94a3b8" stroke-width="1"/>',
+        f'<line x1="{left}" y1="{top}" x2="{left}" y2="{top + plot_height}" stroke="#94a3b8" stroke-width="1"/>',
+        f'<text x="{left + plot_width / 2}" y="{height - 12}" text-anchor="middle" font-size="12" font-family="sans-serif" fill="#475569">{html.escape(x_label)}</text>',
+        f'<text x="18" y="{top + plot_height / 2}" transform="rotate(-90 18 {top + plot_height / 2})" text-anchor="middle" font-size="12" font-family="sans-serif" fill="#475569">{html.escape(y_label)}</text>',
+    ]
+
+    for _, row in valid.iterrows():
+        x_value = float(row["_x"])
+        y_value = float(row["_y"])
+        x_pos = left + _scale(x_value, x_min, x_max, plot_width)
+        y_pos = top + plot_height - _scale(y_value, y_min, y_max, plot_height)
+        color_key = str(row.get(color_column, "")).strip()
+        color = palette.get(color_key, "#4b5563")
+        label = html.escape(str(row.get("sample_id", "")))
+        parts.append(
+            f'<circle cx="{x_pos:.1f}" cy="{y_pos:.1f}" r="4" fill="{color}" fill-opacity="0.85">'
+            f'<title>{label}: {x_label}={x_value:.3f}, {y_label}={y_value:.3f}, {color_column}={color_key}</title>'
+            "</circle>"
+        )
+
+    parts.append(
+        f'<text x="{left}" y="{top + plot_height + 20}" font-size="11" font-family="sans-serif" fill="#64748b">{x_min:.2f}</text>'
+    )
+    parts.append(
+        f'<text x="{left + plot_width}" y="{top + plot_height + 20}" text-anchor="end" font-size="11" font-family="sans-serif" fill="#64748b">{x_max:.2f}</text>'
+    )
+    parts.append(
+        f'<text x="{left - 8}" y="{top + plot_height}" text-anchor="end" font-size="11" font-family="sans-serif" fill="#64748b">{y_min:.2f}</text>'
+    )
+    parts.append(
+        f'<text x="{left - 8}" y="{top + 4}" text-anchor="end" font-size="11" font-family="sans-serif" fill="#64748b">{y_max:.2f}</text>'
+    )
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+def _empty_svg(title: str, subtitle: str, message: str) -> str:
+    """Return an empty-state SVG."""
+
+    return (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="720" height="220">'
+        '<rect width="100%" height="100%" fill="#ffffff"/>'
+        f'<text x="24" y="30" font-size="22" font-family="sans-serif" fill="#1f2937">{html.escape(title)}</text>'
+        f'<text x="24" y="52" font-size="12" font-family="sans-serif" fill="#6b7280">{html.escape(subtitle)}</text>'
+        f'<text x="24" y="120" font-size="14" font-family="sans-serif" fill="#6b7280">{html.escape(message)}</text>'
+        "</svg>"
+    )
+
+
+def _axis_bounds(values: list[float]) -> tuple[float, float]:
+    """Return non-degenerate axis bounds."""
+
+    if not values:
+        return 0.0, 1.0
+    minimum = min(values)
+    maximum = max(values)
+    if math.isclose(minimum, maximum):
+        padding = 0.5 if math.isclose(minimum, 0.0) else max(abs(minimum) * 0.1, 0.1)
+        return minimum - padding, maximum + padding
+    return minimum, maximum
+
+
+def _scale(value: float, low: float, high: float, span: float) -> float:
+    """Scale a numeric value into a screen span."""
+
+    if math.isclose(low, high):
+        return span / 2.0
+    return (value - low) / (high - low) * span
+
+
+def _fmt(value: object) -> str:
+    """Format a summary scalar for HTML cards."""
+
+    if value is None:
+        return "NA"
+    if isinstance(value, float):
+        if math.isnan(value):
+            return "NA"
+        return f"{value:.3f}"
+    return str(value)

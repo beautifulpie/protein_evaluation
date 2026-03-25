@@ -7,6 +7,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Iterable, Mapping
 
+from .diagnostics import build_explainability_record, classify_failure
 from .io_utils import load_structure, parse_chain_groups, parse_chain_list, resolve_input_path
 from .metrics import evaluate_binary_complex
 from .multimer import evaluate_multimer_complex
@@ -45,6 +46,7 @@ class EvaluationConfig:
     min_matched_residue_fraction: float = 0.7
     min_sequence_identity: float = 0.5
     max_chain_length_difference: int = 10
+    mapping_confidence_mode: str = "heuristic"
 
 
 @dataclass(frozen=True)
@@ -135,11 +137,13 @@ def evaluate_record(
     status = "low_confidence_mapping" if mapping_reasons else "success"
     error_type = "LowConfidenceMapping" if mapping_reasons else ""
     error_message = "; ".join(mapping_reasons)
+    explainability = build_explainability_record(metrics, mode=config.mapping_confidence_mode)
 
-    return {
+    output = {
         "sample_id": str(record["sample_id"]),
         "target_id": str(record["target_id"]),
         "rank": rank,
+        "method": _optional_field(record, "method"),
         "pred_path": str(record["pred_path"]),
         "gt_path": str(record["gt_path"]),
         "evaluation_mode": evaluation_mode,
@@ -147,9 +151,12 @@ def evaluate_record(
         "status": status,
         "error_type": error_type,
         "error_message": error_message,
+        "failure_category": "",
         "mapping_low_confidence_reasons": error_message,
         **metrics,
     }
+    output.update(explainability.to_row_fields())
+    return output
 
 
 def safe_evaluate_record(
@@ -166,11 +173,13 @@ def safe_evaluate_record(
             "sample_id": str(record.get("sample_id", "")),
             "target_id": str(record.get("target_id", "")),
             "rank": record.get("rank", ""),
+            "method": _optional_field(record, "method"),
             "pred_path": str(record.get("pred_path", "")),
             "gt_path": str(record.get("gt_path", "")),
             "status": "failed",
             "error_type": type(exc).__name__,
             "error_message": str(exc),
+            "failure_category": classify_failure(exc),
             "mapping_low_confidence_reasons": "",
             "config": asdict(config),
         }
@@ -369,3 +378,12 @@ def _serialize_chain_groups(chain_groups: Iterable[list[str]]) -> str:
     """Serialize pipe-separated chain groups."""
 
     return "|".join(",".join(group) for group in chain_groups)
+
+
+def _optional_field(record: Mapping[str, object], key: str) -> str:
+    """Return an optional manifest field as a stable string."""
+
+    value = record.get(key)
+    if _is_missing_value(value):
+        return ""
+    return str(value)

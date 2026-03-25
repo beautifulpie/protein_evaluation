@@ -11,3 +11,4 @@ dist/
 .coverage
 htmlcov/
 results/
+smoke_results*/

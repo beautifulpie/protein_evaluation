@@ -12,8 +12,10 @@ import pandas as pd
 from tqdm import tqdm
 
 from .aggregate import write_aggregate_outputs
+from .diagnostics import strip_explainability_fields, write_per_sample_diagnostics_jsonl
 from .evaluate import EvaluationConfig, safe_evaluate_record, validate_manifest_columns
 from .validation import write_validation_outputs
+from .visualize import write_visualization_outputs
 
 LOGGER = logging.getLogger("complex_eval")
 
@@ -114,6 +116,42 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional explicit DockQ executable path for --validation_mode dockq.",
     )
+    parser.add_argument(
+        "--write_diagnostics_jsonl",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Write results/per_sample_diagnostics.jsonl with structured per-sample diagnostics.",
+    )
+    parser.add_argument(
+        "--include_explainability_fields",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Include explainability fields in written CSV/JSON outputs.",
+    )
+    parser.add_argument(
+        "--mapping_confidence_mode",
+        choices=("heuristic",),
+        default="heuristic",
+        help="Mapping confidence scoring mode.",
+    )
+    parser.add_argument(
+        "--summary_by_method",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Write method-stratified diagnostic summaries. Defaults to auto when a method column exists.",
+    )
+    parser.add_argument(
+        "--summary_by_confidence",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Write confidence-stratified diagnostic summaries.",
+    )
+    parser.add_argument(
+        "--write_visualizations",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Write lightweight HTML/SVG visualization outputs for diagnostic review.",
+    )
     parser.add_argument("--verbose", action="store_true", help="Enable verbose logging.")
     return parser
 
@@ -149,26 +187,43 @@ def main(argv: Iterable[str] | None = None) -> int:
         min_matched_residue_fraction=args.min_matched_residue_fraction,
         min_sequence_identity=args.min_sequence_identity,
         max_chain_length_difference=args.max_chain_length_difference,
+        mapping_confidence_mode=args.mapping_confidence_mode,
     )
 
     records = manifest_df.to_dict(orient="records")
     LOGGER.info("Evaluating %d samples with %d worker(s)", len(records), args.workers)
-    successes, failures = _run_evaluation(records, config=config, manifest_dir=manifest_dir, workers=args.workers)
+    successes, failures, all_rows = _run_evaluation(
+        records,
+        config=config,
+        manifest_dir=manifest_dir,
+        workers=args.workers,
+    )
 
     out_dir.mkdir(parents=True, exist_ok=True)
     metrics_rows: list[dict[str, object]] = list(successes)
     if args.include_failed_rows:
         metrics_rows.extend(failures)
+    if not args.include_explainability_fields:
+        metrics_rows = [strip_explainability_fields(row) for row in metrics_rows]
     metrics_df = pd.DataFrame(metrics_rows)
+    all_rows_for_reports = [row.copy() for row in all_rows]
+    diagnostics_rows = (
+        all_rows_for_reports
+        if args.include_explainability_fields
+        else [strip_explainability_fields(row) for row in all_rows_for_reports]
+    )
+    all_rows_df = pd.DataFrame(all_rows_for_reports)
     failures_df = pd.DataFrame(
         failures,
         columns=[
             "sample_id",
             "target_id",
             "rank",
+            "method",
             "pred_path",
             "gt_path",
             "status",
+            "failure_category",
             "error_type",
             "error_message",
             "mapping_low_confidence_reasons",
@@ -178,13 +233,28 @@ def main(argv: Iterable[str] | None = None) -> int:
 
     if metrics_df.empty:
         LOGGER.warning("No samples were evaluated successfully.")
-    write_aggregate_outputs(
+    summary_diagnostics = write_aggregate_outputs(
         metrics_df=metrics_df,
         out_dir=out_dir,
         topk=args.topk,
         include_invalid_rows_in_summary=args.include_invalid_rows_in_summary,
+        all_rows_df=all_rows_df,
+        summary_by_method=args.summary_by_method,
+        summary_by_confidence=args.summary_by_confidence,
     )
     failures_df.to_csv(out_dir / "failures.csv", index=False)
+    if args.write_diagnostics_jsonl:
+        write_per_sample_diagnostics_jsonl(
+            rows=diagnostics_rows,
+            path=out_dir / "per_sample_diagnostics.jsonl",
+            include_explainability_fields=args.include_explainability_fields,
+        )
+    if args.write_visualizations:
+        write_visualization_outputs(
+            all_rows_df=all_rows_df,
+            summary_diagnostics=summary_diagnostics,
+            out_dir=out_dir,
+        )
     if args.validation_mode != "none" and not metrics_df.empty:
         validation_summary = write_validation_outputs(
             metrics_df=metrics_df,
@@ -218,7 +288,7 @@ def _run_evaluation(
     config: EvaluationConfig,
     manifest_dir: Path,
     workers: int,
-) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+) -> tuple[list[dict[str, object]], list[dict[str, object]], list[dict[str, object]]]:
     """Run evaluation serially or with multiprocessing."""
 
     successes: list[tuple[int, dict[str, object]]] = []
@@ -234,7 +304,7 @@ def _run_evaluation(
                 successes.append((index, outcome.metrics or {}))
             else:
                 failures.append((index, outcome.failure or {}))
-        return _sorted_rows(successes), _sorted_rows(failures)
+        return _sorted_rows(successes), _sorted_rows(failures), _sorted_rows([*successes, *failures])
 
     with ProcessPoolExecutor(max_workers=workers) as executor:
         future_to_sample = {
@@ -249,7 +319,9 @@ def _run_evaluation(
             else:
                 failures.append((index, outcome.failure or {}))
 
-    return _sorted_rows(successes), _sorted_rows(failures)
+    return _sorted_rows(successes), _sorted_rows(failures), _sorted_rows([*successes, *failures])
+
+
 def _sorted_rows(rows: list[tuple[int, dict[str, object]]]) -> list[dict[str, object]]:
     """Return deterministic row ordering by manifest order."""
 

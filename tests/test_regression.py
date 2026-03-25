@@ -45,6 +45,24 @@ class RegressionTests(unittest.TestCase):
             self.assertEqual(summary["count"], expected_summary["count"])
             self.assertEqual(summary["status_counts"], expected_summary["status_counts"])
 
+            diagnostics_lines = [
+                json.loads(line)
+                for line in (out_dir / "per_sample_diagnostics.jsonl").read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+            self.assertEqual(len(diagnostics_lines), 2)
+            self.assertIn("core_metrics", diagnostics_lines[0])
+            self.assertIn("mapping_diagnostics", diagnostics_lines[0])
+            self.assertIn("interface_diagnostics", diagnostics_lines[0])
+            self.assertIn("explainability", diagnostics_lines[0])
+
+            summary_diagnostics = json.loads((out_dir / "summary_diagnostics.json").read_text(encoding="utf-8"))
+            self.assertIn("overall", summary_diagnostics)
+            self.assertIn("by_target_id", summary_diagnostics)
+            self.assertIn("by_confidence", summary_diagnostics)
+            self.assertIn("top1", summary_diagnostics["overall"])
+            self.assertEqual(summary_diagnostics["overall"]["top1"]["count"], 2)
+
     def test_workers_1_and_2_produce_identical_outputs(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
@@ -81,6 +99,34 @@ class RegressionTests(unittest.TestCase):
             failures_one = pd.read_csv(out_one / "failures.csv")
             failures_two = pd.read_csv(out_two / "failures.csv")
             pd.testing.assert_frame_equal(failures_one, failures_two)
+
+    def test_method_column_enables_method_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            manifest_path = tmp / "manifest_with_method.csv"
+            manifest_df = pd.read_csv(FIXTURE_DIR / "manifest.csv")
+            manifest_df["pred_path"] = manifest_df["pred_path"].apply(lambda value: str((FIXTURE_DIR / value).resolve()))
+            manifest_df["gt_path"] = manifest_df["gt_path"].apply(lambda value: str((FIXTURE_DIR / value).resolve()))
+            manifest_df["method"] = ["method_a", "method_b"]
+            manifest_df.to_csv(manifest_path, index=False)
+
+            out_dir = tmp / "results"
+            exit_code = cli_main(
+                [
+                    "--manifest",
+                    str(manifest_path),
+                    "--out_dir",
+                    str(out_dir),
+                    "--workers",
+                    "1",
+                ]
+            )
+            self.assertEqual(exit_code, 0)
+
+            summary_diagnostics = json.loads((out_dir / "summary_diagnostics.json").read_text(encoding="utf-8"))
+            self.assertIn("by_method", summary_diagnostics)
+            self.assertIn("method_a", summary_diagnostics["by_method"]["per_sample"])
+            self.assertIn("method_b", summary_diagnostics["by_method"]["per_sample"])
 
 
 if __name__ == "__main__":

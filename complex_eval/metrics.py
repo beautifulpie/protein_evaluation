@@ -395,6 +395,74 @@ def compute_fnat(
     return recovered / len(native_contacts), len(native_contacts), recovered
 
 
+def collect_predicted_contacts(
+    match_result: ComplexMatchResult,
+    contact_cutoff: float = 5.0,
+) -> set[tuple[ResidueKey, ResidueKey]]:
+    """Collect predicted residue-residue contacts projected into native residue key space.
+
+    Only matched residues are included so the resulting contact set is comparable
+    to the native contact set. This makes the diagnostic counts interpretable for
+    benchmarking without silently conflating unmatched predicted residues with
+    native residue identifiers.
+    """
+
+    receptor_coords, receptor_owner = _collect_mapped_heavy_atoms(match_result.receptor.matched_pairs)
+    ligand_coords, ligand_owner = _collect_mapped_heavy_atoms(match_result.ligand.matched_pairs)
+    if len(receptor_coords) == 0 or len(ligand_coords) == 0:
+        return set()
+
+    receptor_tree = cKDTree(receptor_coords)
+    ligand_tree = cKDTree(ligand_coords)
+    atom_pairs = receptor_tree.query_ball_tree(ligand_tree, contact_cutoff)
+
+    contacts: set[tuple[ResidueKey, ResidueKey]] = set()
+    for receptor_index, neighbors in enumerate(atom_pairs):
+        receptor_key = receptor_owner[receptor_index]
+        for ligand_index in neighbors:
+            contacts.add((receptor_key, ligand_owner[ligand_index]))
+    return contacts
+
+
+def interface_contact_metrics(
+    native_contacts: set[tuple[ResidueKey, ResidueKey]],
+    predicted_contacts: set[tuple[ResidueKey, ResidueKey]],
+) -> dict[str, float | int]:
+    """Return explainable contact-set diagnostics.
+
+    Precision/recall/F1 are left as NaN when their denominator is zero so that
+    empty-interface edge cases are visible rather than silently scored as 0 or 1.
+    """
+
+    recovered_contacts = native_contacts & predicted_contacts
+    missing_contacts = native_contacts - predicted_contacts
+    false_contacts = predicted_contacts - native_contacts
+
+    native_count = len(native_contacts)
+    predicted_count = len(predicted_contacts)
+    recovered_count = len(recovered_contacts)
+    missing_count = len(missing_contacts)
+    false_count = len(false_contacts)
+
+    precision = recovered_count / predicted_count if predicted_count > 0 else math.nan
+    recall = recovered_count / native_count if native_count > 0 else math.nan
+    if math.isnan(precision) or math.isnan(recall) or precision + recall == 0.0:
+        f1 = math.nan
+    else:
+        f1 = 2.0 * precision * recall / (precision + recall)
+
+    return {
+        "interface_native_contact_count": native_count,
+        "interface_pred_contact_count": predicted_count,
+        "interface_recovered_contact_count": recovered_count,
+        "interface_missing_contact_count": missing_count,
+        "interface_false_contact_count": false_count,
+        "interface_precision": precision,
+        "interface_recall": recall,
+        "interface_f1": f1,
+    }
+
+
 def dockq_score(fnat: float, irmsd: float, lrmsd: float) -> float:
     """Compute DockQ from Fnat, iRMSD, and LRMSD."""
 
@@ -403,6 +471,18 @@ def dockq_score(fnat: float, irmsd: float, lrmsd: float) -> float:
     irmsd_term = 1.0 / (1.0 + (irmsd / 1.5) ** 2)
     lrmsd_term = 1.0 / (1.0 + (lrmsd / 8.5) ** 2)
     return (fnat + irmsd_term + lrmsd_term) / 3.0
+
+
+def dockq_decomposition(fnat: float, irmsd: float, lrmsd: float) -> dict[str, float]:
+    """Return the three DockQ decomposition terms."""
+
+    irmsd_term = math.nan if math.isnan(irmsd) else 1.0 / (1.0 + (irmsd / 1.5) ** 2)
+    lrmsd_term = math.nan if math.isnan(lrmsd) else 1.0 / (1.0 + (lrmsd / 8.5) ** 2)
+    return {
+        "dockq_decomposition_fnat_term": fnat,
+        "dockq_decomposition_irmsd_term": irmsd_term,
+        "dockq_decomposition_lrmsd_term": lrmsd_term,
+    }
 
 
 def dockq_success_flags(score: float) -> dict[str, bool]:
@@ -530,6 +610,7 @@ def evaluate_binary_complex(
         ligand_residues=gt_ligand_residues,
         cutoff=contact_cutoff,
     )
+    predicted_contacts = collect_predicted_contacts(match_result, contact_cutoff=contact_cutoff)
     fnat, num_native_contacts, num_recovered_contacts = compute_fnat(
         native_contacts=native_contacts,
         match_result=match_result,
@@ -537,8 +618,10 @@ def evaluate_binary_complex(
     )
 
     dockq = dockq_score(fnat, irmsd, lrmsd)
+    dockq_terms = dockq_decomposition(fnat, irmsd, lrmsd)
     success_flags = dockq_success_flags(dockq)
     lddt_ca = compute_lddt_ca(match_result) if include_lddt else math.nan
+    interface_metrics = interface_contact_metrics(native_contacts, predicted_contacts)
 
     if include_clashes:
         clash_count, clashes_per_1000_atoms = count_steric_clashes(pred_all_residues)
@@ -573,6 +656,8 @@ def evaluate_binary_complex(
         "used_ca_fallback_for_lrmsd": used_ca_fallback_for_lrmsd,
         "parse_warning": _merge_warnings(pred_structure.warnings + gt_structure.warnings + match_result.warnings),
     }
+    metrics.update(dockq_terms)
+    metrics.update(interface_metrics)
     metrics.update(mapping_diagnostics(match_result))
     return metrics
 
@@ -754,7 +839,7 @@ def mapping_diagnostics(match_result: ComplexMatchResult) -> dict[str, object]:
             }
         )
 
-    diagnostics["mapping_confidence_score"] = min(
+    confidence_floor = min(
         value
         for value in [
             diagnostics.get("receptor_matched_residue_fraction", math.nan),
@@ -763,6 +848,8 @@ def mapping_diagnostics(match_result: ComplexMatchResult) -> dict[str, object]:
         ]
         if not math.isnan(float(value))
     ) if match_result.all_pairs else math.nan
+    diagnostics["mapping_confidence_score"] = confidence_floor
+    diagnostics["mapping_confidence_floor_signal"] = confidence_floor
     return diagnostics
 
 
@@ -864,6 +951,23 @@ def _collect_heavy_atoms_with_owner(
         for atom in residue.heavy_atoms():
             coords.append(atom.coord)
             owners.append(residue.key)
+
+    if not coords:
+        return np.empty((0, 3), dtype=float), []
+    return np.vstack(coords), owners
+
+
+def _collect_mapped_heavy_atoms(
+    matches: Iterable[ResidueMatch],
+) -> tuple[np.ndarray, list[ResidueKey]]:
+    """Collect predicted heavy atoms using ground-truth residue keys as owners."""
+
+    coords: list[np.ndarray] = []
+    owners: list[ResidueKey] = []
+    for match in matches:
+        for atom in match.pred.heavy_atoms():
+            coords.append(atom.coord)
+            owners.append(match.gt.key)
 
     if not coords:
         return np.empty((0, 3), dtype=float), []

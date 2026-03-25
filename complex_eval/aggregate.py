@@ -38,19 +38,28 @@ def write_aggregate_outputs(
     out_dir: str | Path,
     topk: int,
     include_invalid_rows_in_summary: bool = False,
-) -> None:
+    all_rows_df: pd.DataFrame | None = None,
+    summary_by_method: bool | None = None,
+    summary_by_confidence: bool = True,
+) -> dict[str, object]:
     """Write per-sample outputs and aggregate summaries."""
 
     out_path = Path(out_dir)
     out_path.mkdir(parents=True, exist_ok=True)
 
     ordered_metrics = metrics_df.copy()
+    all_rows = all_rows_df.copy() if all_rows_df is not None else metrics_df.copy()
     for column, dtype in (("target_id", "object"), ("rank", "float64"), ("sample_id", "object")):
         if column not in ordered_metrics.columns:
             ordered_metrics[column] = pd.Series(dtype=dtype)
+        if column not in all_rows.columns:
+            all_rows[column] = pd.Series(dtype=dtype)
     ordered_metrics["_rank_sort"] = pd.to_numeric(ordered_metrics["rank"], errors="coerce")
     ordered_metrics = ordered_metrics.sort_values(["target_id", "_rank_sort", "sample_id"]).reset_index(drop=True)
     ordered_metrics = ordered_metrics.drop(columns=["_rank_sort"], errors="ignore")
+    all_rows["_rank_sort"] = pd.to_numeric(all_rows["rank"], errors="coerce")
+    all_rows = all_rows.sort_values(["target_id", "_rank_sort", "sample_id"]).reset_index(drop=True)
+    all_rows = all_rows.drop(columns=["_rank_sort"], errors="ignore")
     ordered_metrics.to_csv(out_path / "per_sample_metrics.csv", index=False)
 
     summary_input = _filter_summary_rows(ordered_metrics, include_invalid_rows=include_invalid_rows_in_summary)
@@ -68,6 +77,19 @@ def write_aggregate_outputs(
 
     (out_path / "summary_top1.json").write_text(json.dumps(summary_top1, indent=2), encoding="utf-8")
     (out_path / "summary_best_of_k.json").write_text(json.dumps(summary_best_of_k, indent=2), encoding="utf-8")
+    summary_diagnostics = summarize_diagnostics(
+        ordered_metrics=ordered_metrics,
+        all_rows=all_rows,
+        topk=topk,
+        include_invalid_rows=include_invalid_rows_in_summary,
+        summary_by_method=summary_by_method,
+        summary_by_confidence=summary_by_confidence,
+    )
+    (out_path / "summary_diagnostics.json").write_text(
+        json.dumps(summary_diagnostics, indent=2),
+        encoding="utf-8",
+    )
+    return summary_diagnostics
 
 
 def select_top1(metrics_df: pd.DataFrame) -> pd.DataFrame:
@@ -215,3 +237,110 @@ def _selection_metric(
     else:
         fallback = pd.Series(float("nan"), index=metrics_df.index, dtype="float64")
     return primary.fillna(fallback).fillna(fill_value)
+
+
+def summarize_diagnostics(
+    ordered_metrics: pd.DataFrame,
+    all_rows: pd.DataFrame,
+    topk: int,
+    include_invalid_rows: bool,
+    summary_by_method: bool | None,
+    summary_by_confidence: bool,
+) -> dict[str, object]:
+    """Write benchmark-friendly diagnostic summaries."""
+
+    filtered_all_rows = _filter_summary_rows(all_rows, include_invalid_rows=include_invalid_rows)
+    filtered_metrics = _filter_summary_rows(ordered_metrics, include_invalid_rows=include_invalid_rows)
+    top1_df = select_top1(filtered_metrics)
+    best_of_k_df = select_best_of_k(filtered_metrics, topk=topk)
+    top1_all_rows = select_top1(all_rows)
+    best_of_k_all_rows = select_best_of_k(all_rows, topk=topk)
+
+    auto_summary_by_method = bool(summary_by_method)
+    if summary_by_method is None:
+        auto_summary_by_method = "method" in all_rows.columns and all_rows["method"].fillna("").astype(str).str.strip().ne("").any()
+
+    summary: dict[str, object] = {
+        "include_invalid_rows": bool(include_invalid_rows),
+        "overall": {
+            "per_sample": benchmark_summary(filtered_all_rows, source_rows=all_rows),
+            "top1": benchmark_summary(top1_df, source_rows=top1_all_rows),
+            "best_of_k": benchmark_summary(best_of_k_df, source_rows=best_of_k_all_rows),
+        },
+        "by_target_id": _group_summaries(filtered_all_rows, "target_id"),
+    }
+    if summary_by_confidence:
+        summary["by_confidence"] = {
+            "per_sample": _group_summaries(filtered_all_rows, "mapping_confidence_label"),
+            "top1": _group_summaries(top1_df, "mapping_confidence_label"),
+            "best_of_k": _group_summaries(best_of_k_df, "mapping_confidence_label"),
+        }
+    if auto_summary_by_method:
+        summary["by_method"] = {
+            "per_sample": _group_summaries(filtered_all_rows, "method"),
+            "top1": _group_summaries(top1_df, "method"),
+            "best_of_k": _group_summaries(best_of_k_df, "method"),
+        }
+    return summary
+
+
+def benchmark_summary(metrics_df: pd.DataFrame, source_rows: pd.DataFrame | None = None) -> dict[str, object]:
+    """Return a benchmark-oriented summary with explainability statistics."""
+
+    source = source_rows if source_rows is not None else metrics_df
+    return {
+        "count": int(len(metrics_df)),
+        "success_rate_dockq_ge_0_23": _rate(metrics_df, "dockq", lambda series: series >= 0.23),
+        "success_rate_dockq_ge_0_49": _rate(metrics_df, "dockq", lambda series: series >= 0.49),
+        "success_rate_dockq_ge_0_80": _rate(metrics_df, "dockq", lambda series: series >= 0.80),
+        "mean_mapping_confidence_score": _mean(metrics_df, "mapping_confidence_score"),
+        "fraction_low_confidence_mapping": _status_fraction(source, "low_confidence_mapping"),
+        "fraction_samples_using_sequence_fallback": _bool_fraction(source, "used_sequence_fallback"),
+        "fraction_samples_using_ca_fallback_irmsd": _bool_fraction(source, "used_ca_fallback_for_irmsd"),
+        "fraction_samples_using_ca_fallback_lrmsd": _bool_fraction(source, "used_ca_fallback_for_lrmsd"),
+        "mean_interface_precision": _mean(metrics_df, "interface_precision"),
+        "mean_interface_recall": _mean(metrics_df, "interface_recall"),
+        "mean_interface_f1": _mean(metrics_df, "interface_f1"),
+        "mean_dockq": _mean(metrics_df, "dockq"),
+        "mean_pairwise_dockq_mean": _mean(metrics_df, "pairwise_dockq_mean"),
+        "mean_fnat": _mean(metrics_df, "fnat"),
+        "mean_pairwise_fnat_mean": _mean(metrics_df, "pairwise_fnat_mean"),
+        "status_counts": (
+            source["status"].fillna("success").value_counts().sort_index().to_dict()
+            if "status" in source.columns
+            else {}
+        ),
+    }
+
+
+def _group_summaries(metrics_df: pd.DataFrame, column: str) -> dict[str, object]:
+    """Return grouped benchmark summaries."""
+
+    if metrics_df.empty or column not in metrics_df.columns:
+        return {}
+    values = metrics_df[column].fillna("").astype(str).str.strip()
+    grouped = metrics_df.assign(_group_value=values)
+    grouped = grouped[grouped["_group_value"] != ""]
+    if grouped.empty:
+        return {}
+    return {
+        group_value: benchmark_summary(group_df.drop(columns=["_group_value"], errors="ignore"))
+        for group_value, group_df in grouped.groupby("_group_value")
+    }
+
+
+def _bool_fraction(metrics_df: pd.DataFrame, column: str) -> float | None:
+    """Return the fraction of rows where a boolean-like column is true."""
+
+    if metrics_df.empty or column not in metrics_df.columns:
+        return None
+    series = metrics_df[column].fillna(False).astype(bool)
+    return float(series.mean())
+
+
+def _status_fraction(metrics_df: pd.DataFrame, status: str) -> float | None:
+    """Return the fraction of rows with a particular status."""
+
+    if metrics_df.empty or "status" not in metrics_df.columns:
+        return None
+    return float(metrics_df["status"].fillna("success").eq(status).mean())
