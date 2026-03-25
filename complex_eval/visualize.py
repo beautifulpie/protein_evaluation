@@ -8,6 +8,26 @@ from pathlib import Path
 
 import pandas as pd
 
+METRIC_PLOT_SPECS: tuple[tuple[str, str, str, bool], ...] = (
+    ("ca_rmsd", "Global C-alpha RMSD", "Whole-complex C-alpha alignment error; lower is better.", False),
+    ("all_atom_rmsd", "All-heavy-atom RMSD", "Matched heavy-atom RMSD after rigid alignment; lower is better.", False),
+    ("irmsd", "iRMSD", "Interface backbone RMSD on native interface residues; lower is better.", False),
+    ("lrmsd", "LRMSD", "Ligand RMSD after receptor superposition; lower is better.", False),
+    ("fnat", "Fnat", "Recovered native contact fraction; higher is better.", True),
+    ("dockq", "DockQ", "Internal DockQ implementation; higher is better.", True),
+    ("lddt_ca", "lDDT-Ca", "C-alpha local distance difference test; higher is better.", True),
+    ("clash_count", "Clash Count", "Approximate heavy-atom steric clashes; lower is better.", False),
+    (
+        "clashes_per_1000_atoms",
+        "Clashes Per 1000 Atoms",
+        "Approximate clash density normalized by atom count; lower is better.",
+        False,
+    ),
+    ("interface_precision", "Interface Precision", "Fraction of predicted contacts that are native; higher is better.", True),
+    ("interface_recall", "Interface Recall", "Fraction of native contacts recovered; higher is better.", True),
+    ("interface_f1", "Interface F1", "Harmonic mean of interface precision and recall; higher is better.", True),
+)
+
 
 def write_visualization_outputs(
     all_rows_df: pd.DataFrame,
@@ -100,6 +120,18 @@ def write_visualization_outputs(
         ),
         encoding="utf-8",
     )
+    for metric_column, title, subtitle, higher_is_better in METRIC_PLOT_SPECS:
+        (plots_dir / f"metric_{metric_column}.svg").write_text(
+            _metric_distribution_svg(
+                frame=all_rows_df,
+                metric_column=metric_column,
+                title=title,
+                subtitle=subtitle,
+                higher_is_better=higher_is_better,
+                color_column="status",
+            ),
+            encoding="utf-8",
+        )
 
     report_html = _build_html_report(all_rows_df, summary_diagnostics)
     (out_path / "report.html").write_text(report_html, encoding="utf-8")
@@ -117,6 +149,7 @@ def _build_html_report(all_rows_df: pd.DataFrame, summary_diagnostics: dict[str,
     performance_table = _performance_overview_table(summary_diagnostics)
     method_table = _method_performance_table(summary_diagnostics)
     top_samples = _top_sample_table(all_rows_df)
+    metric_gallery = _metric_gallery_html()
 
     cards = [
         _metric_card("Per-sample mean DockQ", _fmt(per_sample.get("mean_dockq"))),
@@ -269,6 +302,14 @@ def _build_html_report(all_rows_df: pd.DataFrame, summary_diagnostics: dict[str,
   <div class="panel" style="margin-top:18px;">
     <h2>Per-target summary snapshot</h2>
     {top_targets}
+  </div>
+
+  <div class="panel" style="margin-top:18px;">
+    <h2>Detailed metric gallery</h2>
+    <p>These plots expose the per-sample distribution of each core evaluation metric, including structural RMSDs, contact recovery, lDDT-Ca, clash diagnostics, and interface precision/recall/F1.</p>
+    <div class="grid">
+      {metric_gallery}
+    </div>
   </div>
 </body>
 </html>
@@ -442,6 +483,21 @@ def _top_sample_table(all_rows_df: pd.DataFrame) -> str:
     return display.to_html(index=False, classes="table", border=0, escape=True)
 
 
+def _metric_gallery_html() -> str:
+    """Return HTML panels for the per-metric SVG gallery."""
+
+    panels: list[str] = []
+    for metric_column, title, _, _ in METRIC_PLOT_SPECS:
+        filename = f"plots/metric_{metric_column}.svg"
+        panels.append(
+            '<div class="panel">'
+            f"<h2>{html.escape(title)}</h2>"
+            f'<img src="{html.escape(filename)}" alt="{html.escape(title)}" />'
+            "</div>"
+        )
+    return "".join(panels)
+
+
 def _value_counts(frame: pd.DataFrame, column: str, default_value: str = "") -> dict[str, int]:
     """Return stable value counts for a string column."""
 
@@ -580,6 +636,106 @@ def _scatter_svg(
     )
     parts.append(
         f'<text x="{left + plot_width}" y="{top + plot_height + 20}" text-anchor="end" font-size="11" font-family="sans-serif" fill="#64748b">{x_max:.2f}</text>'
+    )
+    parts.append(
+        f'<text x="{left - 8}" y="{top + plot_height}" text-anchor="end" font-size="11" font-family="sans-serif" fill="#64748b">{y_min:.2f}</text>'
+    )
+    parts.append(
+        f'<text x="{left - 8}" y="{top + 4}" text-anchor="end" font-size="11" font-family="sans-serif" fill="#64748b">{y_max:.2f}</text>'
+    )
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+def _metric_distribution_svg(
+    frame: pd.DataFrame,
+    metric_column: str,
+    title: str,
+    subtitle: str,
+    higher_is_better: bool,
+    color_column: str,
+) -> str:
+    """Render a sorted per-sample metric distribution plot as SVG."""
+
+    width = 720
+    height = 320
+    left = 70
+    right = 30
+    top = 60
+    bottom = 55
+    plot_width = width - left - right
+    plot_height = height - top - bottom
+
+    if frame.empty or metric_column not in frame.columns:
+        return _empty_svg(title, subtitle, "No data available.")
+
+    values = pd.to_numeric(frame[metric_column], errors="coerce")
+    valid = frame.assign(_metric_value=values).dropna(subset=["_metric_value"]).copy()
+    if valid.empty:
+        return _empty_svg(title, subtitle, "No plottable points.")
+
+    valid = valid.sort_values(
+        by=["_metric_value", "sample_id"],
+        ascending=[not higher_is_better, True],
+        na_position="last",
+    ).reset_index(drop=True)
+    metric_values = valid["_metric_value"].astype(float).tolist()
+    y_min, y_max = _axis_bounds(metric_values)
+    mean_value = float(pd.Series(metric_values).mean())
+    median_value = float(pd.Series(metric_values).median())
+
+    palette = {
+        "success": "#2563eb",
+        "low_confidence_mapping": "#d97706",
+        "failed": "#dc2626",
+    }
+
+    parts = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}">',
+        '<rect width="100%" height="100%" fill="#ffffff"/>',
+        f'<text x="24" y="30" font-size="22" font-family="sans-serif" fill="#1f2937">{html.escape(title)}</text>',
+        f'<text x="24" y="50" font-size="12" font-family="sans-serif" fill="#6b7280">{html.escape(subtitle)}</text>',
+        f'<line x1="{left}" y1="{top + plot_height}" x2="{left + plot_width}" y2="{top + plot_height}" stroke="#94a3b8" stroke-width="1"/>',
+        f'<line x1="{left}" y1="{top}" x2="{left}" y2="{top + plot_height}" stroke="#94a3b8" stroke-width="1"/>',
+        f'<text x="{left + plot_width / 2}" y="{height - 12}" text-anchor="middle" font-size="12" font-family="sans-serif" fill="#475569">samples sorted by metric</text>',
+        f'<text x="18" y="{top + plot_height / 2}" transform="rotate(-90 18 {top + plot_height / 2})" text-anchor="middle" font-size="12" font-family="sans-serif" fill="#475569">{html.escape(metric_column)}</text>',
+    ]
+
+    for line_value, label, color in (
+        (mean_value, "mean", "#7c3aed"),
+        (median_value, "median", "#0f766e"),
+    ):
+        y_pos = top + plot_height - _scale(line_value, y_min, y_max, plot_height)
+        parts.append(
+            f'<line x1="{left}" y1="{y_pos:.1f}" x2="{left + plot_width}" y2="{y_pos:.1f}" stroke="{color}" stroke-width="1.5" stroke-dasharray="5 4"/>'
+        )
+        parts.append(
+            f'<text x="{left + plot_width - 4}" y="{y_pos - 4:.1f}" text-anchor="end" font-size="11" font-family="sans-serif" fill="{color}">{label}: {line_value:.3f}</text>'
+        )
+
+    count = len(valid)
+    for index, row in valid.iterrows():
+        if count == 1:
+            x_pos = left + plot_width / 2.0
+        else:
+            x_pos = left + (index / (count - 1)) * plot_width
+        value = float(row["_metric_value"])
+        y_pos = top + plot_height - _scale(value, y_min, y_max, plot_height)
+        color_key = str(row.get(color_column, "")).strip()
+        color = palette.get(color_key, "#4b5563")
+        label = html.escape(str(row.get("sample_id", "")))
+        target = html.escape(str(row.get("target_id", "")))
+        parts.append(
+            f'<circle cx="{x_pos:.1f}" cy="{y_pos:.1f}" r="4" fill="{color}" fill-opacity="0.88">'
+            f'<title>{label} ({target}): {metric_column}={value:.3f}, {color_column}={color_key}</title>'
+            "</circle>"
+        )
+
+    parts.append(
+        f'<text x="{left}" y="{top + plot_height + 20}" font-size="11" font-family="sans-serif" fill="#64748b">best-ranked sample</text>'
+    )
+    parts.append(
+        f'<text x="{left + plot_width}" y="{top + plot_height + 20}" text-anchor="end" font-size="11" font-family="sans-serif" fill="#64748b">worst-ranked sample</text>'
     )
     parts.append(
         f'<text x="{left - 8}" y="{top + plot_height}" text-anchor="end" font-size="11" font-family="sans-serif" fill="#64748b">{y_min:.2f}</text>'

@@ -17,6 +17,7 @@ Files:
 - `plots/diagnostic_tag_counts.svg`
 - `plots/mapping_confidence_vs_dockq.svg`
 - `plots/interface_precision_vs_recall.svg`
+- `plots/metric_*.svg`
 - `source/manifest.csv`
 - `source/data/*.pdb`
 

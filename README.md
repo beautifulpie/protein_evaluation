@@ -293,6 +293,7 @@ The evaluator also writes a lightweight static visualization bundle without addi
 - `results/plots/method_mean_dockq.svg`
 - `results/plots/mapping_confidence_vs_dockq.svg`
 - `results/plots/interface_precision_vs_recall.svg`
+- `results/plots/metric_*.svg` for core structural, interface, and clash metrics
 
 These outputs are designed for benchmark review rather than publication figures. They help surface:
 
@@ -302,6 +303,7 @@ These outputs are designed for benchmark review rather than publication figures.
 - disagreement between mapping confidence and DockQ
 - interface recall/precision tradeoffs
 - recurring diagnostic tags across a batch
+- per-sample distributions for `ca_rmsd`, `all_atom_rmsd`, `irmsd`, `lrmsd`, `fnat`, `dockq`, `lddt_ca`, clash metrics, and interface precision/recall/F1
 
 ### Bundled Example Visualization
 

@@ -34,7 +34,11 @@ class VisualizationTests(unittest.TestCase):
             self.assertIn("Prediction performance overview", report_html)
             self.assertIn("Benchmark performance summary", report_html)
             self.assertIn("Top predicted samples", report_html)
+            self.assertIn("Detailed metric gallery", report_html)
             self.assertIn("plots/status_counts.svg", report_html)
+            self.assertIn("plots/metric_ca_rmsd.svg", report_html)
+            self.assertIn("plots/metric_dockq.svg", report_html)
+            self.assertIn("plots/metric_interface_f1.svg", report_html)
 
             expected_plot_files = [
                 "status_counts.svg",
@@ -44,6 +48,18 @@ class VisualizationTests(unittest.TestCase):
                 "method_mean_dockq.svg",
                 "mapping_confidence_vs_dockq.svg",
                 "interface_precision_vs_recall.svg",
+                "metric_ca_rmsd.svg",
+                "metric_all_atom_rmsd.svg",
+                "metric_irmsd.svg",
+                "metric_lrmsd.svg",
+                "metric_fnat.svg",
+                "metric_dockq.svg",
+                "metric_lddt_ca.svg",
+                "metric_clash_count.svg",
+                "metric_clashes_per_1000_atoms.svg",
+                "metric_interface_precision.svg",
+                "metric_interface_recall.svg",
+                "metric_interface_f1.svg",
             ]
             for filename in expected_plot_files:
                 plot_path = out_dir / "plots" / filename
