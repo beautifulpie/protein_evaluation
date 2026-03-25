@@ -189,3 +189,7 @@ Each JSON summary includes:
 cd protein_evaluation
 python -m unittest discover -s tests -v
 ```
+
+## License
+
+This project is released under the MIT License. See `LICENSE`.
