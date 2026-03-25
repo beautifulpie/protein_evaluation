@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>complex_eval report</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      margin: 24px;
+      color: #18202a;
+      background: #f7f8fb;
+    }
+    h1, h2 { margin: 0 0 12px 0; }
+    p { margin: 8px 0 16px 0; }
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 12px;
+      margin: 16px 0 24px 0;
+    }
+    .card {
+      background: white;
+      border: 1px solid #d6dbe4;
+      border-radius: 10px;
+      padding: 14px;
+    }
+    .card-title {
+      font-size: 12px;
+      color: #566577;
+      margin-bottom: 8px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .card-value {
+      font-size: 24px;
+      font-weight: 700;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+      gap: 18px;
+      margin: 18px 0 24px 0;
+    }
+    .panel {
+      background: white;
+      border: 1px solid #d6dbe4;
+      border-radius: 10px;
+      padding: 14px;
+    }
+    img {
+      width: 100%;
+      border: 1px solid #eef1f5;
+      border-radius: 8px;
+      background: #fff;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+      background: white;
+    }
+    th, td {
+      text-align: left;
+      padding: 8px 10px;
+      border-bottom: 1px solid #e5e8ee;
+      vertical-align: top;
+    }
+    th {
+      background: #f2f4f8;
+    }
+    code {
+      background: #eef2f8;
+      padding: 1px 4px;
+      border-radius: 4px;
+    }
+  </style>
+</head>
+<body>
+  <h1>complex_eval diagnostic report</h1>
+  <p>This report is a lightweight visual audit layer over the evaluator outputs. It is intended for benchmark triage, mapping-quality review, and result explainability.</p>
+
+  <div class="cards">
+    <div class="card"><div class="card-title">Top-1 count</div><div class="card-value">2</div></div><div class="card"><div class="card-title">Best-of-k count</div><div class="card-value">2</div></div><div class="card"><div class="card-title">Top-1 mean confidence</div><div class="card-value">1.000</div></div><div class="card"><div class="card-title">Best-of-k mean confidence</div><div class="card-value">1.000</div></div><div class="card"><div class="card-title">Best-of-k mean interface F1</div><div class="card-value">1.000</div></div><div class="card"><div class="card-title">Best-of-k DockQ&gt;=0.23</div><div class="card-value">1.000</div></div>
+  </div>
+
+  <div class="grid">
+    <div class="panel">
+      <h2>Status overview</h2>
+      <img src="plots/status_counts.svg" alt="Status counts" />
+    </div>
+    <div class="panel">
+      <h2>Confidence labels</h2>
+      <img src="plots/confidence_label_counts.svg" alt="Confidence labels" />
+    </div>
+    <div class="panel">
+      <h2>Mapping confidence vs DockQ</h2>
+      <img src="plots/mapping_confidence_vs_dockq.svg" alt="Mapping confidence vs DockQ" />
+    </div>
+    <div class="panel">
+      <h2>Interface recall vs precision</h2>
+      <img src="plots/interface_precision_vs_recall.svg" alt="Interface recall vs precision" />
+    </div>
+    <div class="panel">
+      <h2>Diagnostic tag frequency</h2>
+      <img src="plots/diagnostic_tag_counts.svg" alt="Diagnostic tag counts" />
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Low-confidence or failed rows</h2>
+    <p>No low-confidence or failed rows.</p>
+  </div>
+
+  <div class="panel" style="margin-top:18px;">
+    <h2>Per-target summary snapshot</h2>
+    <table class="dataframe table">
+  <thead>
+    <tr style="text-align: right;">
+      <th>target_id</th>
+      <th>count</th>
+      <th>mean_mapping_confidence_score</th>
+      <th>mean_interface_f1</th>
+      <th>mean_dockq</th>
+      <th>success_rate_dockq_ge_0_23</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>T001</td>
+      <td>1</td>
+      <td>1.0</td>
+      <td>1.0</td>
+      <td>1.0</td>
+      <td>1.0</td>
+    </tr>
+    <tr>
+      <td>T002</td>
+      <td>1</td>
+      <td>1.0</td>
+      <td>1.0</td>
+      <td>1.0</td>
+      <td>1.0</td>
+    </tr>
+  </tbody>
+</table>
+  </div>
+</body>
+</html>

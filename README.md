@@ -96,6 +96,11 @@ tests/
   test_safety.py
   test_validation.py
   test_visualize.py
+examples/
+  benchmark_visualization/
+    README.md
+    report.html
+    plots/
 ```
 
 ## Manifest Formats
@@ -293,6 +298,16 @@ These outputs are designed for benchmark review rather than publication figures.
 - disagreement between mapping confidence and DockQ
 - interface recall/precision tradeoffs
 - recurring diagnostic tags across a batch
+
+### Bundled Example Visualization
+
+A checked-in example visualization bundle is included here:
+
+- [examples/benchmark_visualization/report.html](/home/jung/protein_evaluation/examples/benchmark_visualization/report.html)
+- [examples/benchmark_visualization/plots/status_counts.svg](/home/jung/protein_evaluation/examples/benchmark_visualization/plots/status_counts.svg)
+- [examples/benchmark_visualization/plots/confidence_label_counts.svg](/home/jung/protein_evaluation/examples/benchmark_visualization/plots/confidence_label_counts.svg)
+
+This example is generated from the deterministic fixture manifest under `tests/fixtures/benchmark/` and is intended as a stable reference for reviewers and repository visitors.
 
 ### `summary_diagnostics.json`
 
