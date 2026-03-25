@@ -196,6 +196,9 @@ def _dockq_command(executable: str, pred_path: str, gt_path: str) -> list[str]:
 def _dockq_applicability_reason(record: dict[str, Any]) -> str:
     """Return a reason why DockQ validation should be skipped for a row."""
 
+    if str(record.get("evaluation_mode", "binary")) != "binary":
+        return "DockQ validation currently supports only binary evaluation rows."
+
     for key in (
         "pred_receptor_chains",
         "pred_ligand_chains",

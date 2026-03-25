@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "complex-eval"
+version = "0.2.0"
+description = "Safer evaluation toolkit for protein complex structure predictions"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [
+  { name = "beautifulpie" }
+]
+keywords = ["protein", "complex", "structure", "dockq", "evaluation", "bioinformatics"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+dependencies = [
+  "numpy>=1.26,<3",
+  "pandas>=2,<4",
+  "scipy>=1.11,<2",
+  "biopython>=1.83,<2",
+  "gemmi>=0.7.0,<0.8",
+  "tqdm>=4.66,<5",
+]
+
+[project.scripts]
+complex-eval = "complex_eval.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/beautifulpie/protein_evaluation"
+Repository = "https://github.com/beautifulpie/protein_evaluation"
+Issues = "https://github.com/beautifulpie/protein_evaluation/issues"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["complex_eval*"]

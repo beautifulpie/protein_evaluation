@@ -12,7 +12,7 @@ import pandas as pd
 from tqdm import tqdm
 
 from .aggregate import write_aggregate_outputs
-from .evaluate import EvaluationConfig, REQUIRED_MANIFEST_COLUMNS, safe_evaluate_record
+from .evaluate import EvaluationConfig, safe_evaluate_record, validate_manifest_columns
 from .validation import write_validation_outputs
 
 LOGGER = logging.getLogger("complex_eval")
@@ -135,7 +135,7 @@ def main(argv: Iterable[str] | None = None) -> int:
 
     LOGGER.info("Reading manifest from %s", manifest_path)
     manifest_df = pd.read_csv(manifest_path)
-    _validate_manifest_columns(manifest_df)
+    validate_manifest_columns(manifest_df.columns)
 
     config = EvaluationConfig(
         contact_cutoff=args.contact_cutoff,
@@ -250,16 +250,6 @@ def _run_evaluation(
                 failures.append((index, outcome.failure or {}))
 
     return _sorted_rows(successes), _sorted_rows(failures)
-
-
-def _validate_manifest_columns(manifest_df: pd.DataFrame) -> None:
-    """Ensure the manifest contains the required columns."""
-
-    missing = [column for column in REQUIRED_MANIFEST_COLUMNS if column not in manifest_df.columns]
-    if missing:
-        raise ValueError(f"Manifest is missing required columns: {', '.join(missing)}")
-
-
 def _sorted_rows(rows: list[tuple[int, dict[str, object]]]) -> list[dict[str, object]]:
     """Return deterministic row ordering by manifest order."""
 

@@ -144,6 +144,20 @@ def parse_chain_list(value: str | float | None) -> list[str]:
     return [item.strip() for item in text.split(",") if item.strip()]
 
 
+def parse_chain_groups(value: str | float | None) -> list[list[str]]:
+    """Parse pipe-separated chain groups with comma-separated chain IDs."""
+
+    if value is None:
+        return []
+    if isinstance(value, float) and np.isnan(value):
+        return []
+    text = str(value).strip()
+    if not text:
+        return []
+    groups = [parse_chain_list(group_text) for group_text in text.split("|")]
+    return [group for group in groups if group]
+
+
 def resolve_input_path(path_value: str | Path, base_dir: str | Path) -> Path:
     """Resolve an input path relative to the manifest directory."""
 

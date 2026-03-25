@@ -14,6 +14,11 @@ SUMMARY_METRIC_COLUMNS: tuple[str, ...] = (
     "lrmsd",
     "fnat",
     "dockq",
+    "pairwise_fnat_mean",
+    "pairwise_irmsd_mean",
+    "pairwise_lrmsd_mean",
+    "pairwise_dockq_mean",
+    "pairwise_dockq_min",
     "lddt_ca",
     "clash_count",
     "clashes_per_1000_atoms",
@@ -23,6 +28,7 @@ SUMMARY_METRIC_COLUMNS: tuple[str, ...] = (
     "num_matched_atoms",
     "num_native_contacts",
     "num_recovered_contacts",
+    "mapping_confidence_score",
 )
 VALID_SUMMARY_STATUSES: frozenset[str] = frozenset({"success"})
 
@@ -88,9 +94,24 @@ def select_best_of_k(metrics_df: pd.DataFrame, topk: int) -> pd.DataFrame:
     if candidates.empty:
         return candidates
 
-    candidates["_dockq_sort"] = pd.to_numeric(candidates["dockq"], errors="coerce").fillna(-1.0)
-    candidates["_fnat_sort"] = pd.to_numeric(candidates["fnat"], errors="coerce").fillna(-1.0)
-    candidates["_irmsd_sort"] = pd.to_numeric(candidates["irmsd"], errors="coerce").fillna(float("inf"))
+    candidates["_dockq_sort"] = _selection_metric(
+        candidates,
+        primary_column="dockq",
+        fallback_column="pairwise_dockq_mean",
+        fill_value=-1.0,
+    )
+    candidates["_fnat_sort"] = _selection_metric(
+        candidates,
+        primary_column="fnat",
+        fallback_column="pairwise_fnat_mean",
+        fill_value=-1.0,
+    )
+    candidates["_irmsd_sort"] = _selection_metric(
+        candidates,
+        primary_column="irmsd",
+        fallback_column="pairwise_irmsd_mean",
+        fill_value=float("inf"),
+    )
 
     ordered = candidates.sort_values(
         ["target_id", "_dockq_sort", "_fnat_sort", "_irmsd_sort", "rank", "sample_id"],
@@ -175,3 +196,22 @@ def _filter_summary_rows(metrics_df: pd.DataFrame, include_invalid_rows: bool) -
     if include_invalid_rows or "status" not in metrics_df.columns:
         return metrics_df.copy()
     return metrics_df[metrics_df["status"].fillna("success").isin(VALID_SUMMARY_STATUSES)].copy()
+
+
+def _selection_metric(
+    metrics_df: pd.DataFrame,
+    primary_column: str,
+    fallback_column: str,
+    fill_value: float,
+) -> pd.Series:
+    """Return a selection metric with an explicit fallback column."""
+
+    if primary_column in metrics_df.columns:
+        primary = pd.to_numeric(metrics_df[primary_column], errors="coerce")
+    else:
+        primary = pd.Series(float("nan"), index=metrics_df.index, dtype="float64")
+    if fallback_column in metrics_df.columns:
+        fallback = pd.to_numeric(metrics_df[fallback_column], errors="coerce")
+    else:
+        fallback = pd.Series(float("nan"), index=metrics_df.index, dtype="float64")
+    return primary.fillna(fallback).fillna(fill_value)

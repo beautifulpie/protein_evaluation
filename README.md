@@ -1,81 +1,98 @@
-# Protein_complex_eval
+# complex_eval
 
-`complex_eval` is a small Python toolkit for evaluating predicted binary protein complexes against ground-truth structures. It supports PDB and mmCIF input, multi-chain receptor/ligand partners, per-sample metrics, and top-1 / best-of-k aggregation.
+`complex_eval` is a safety-oriented Python toolkit for evaluating predicted protein complexes against reference structures. It is designed for research batch workflows where visible failure is preferable to a silent wrong score.
 
-## Features
+The repository supports:
 
-- Binary complex evaluation with a receptor/ligand split, where each side may contain one or more chains.
-- PDB and mmCIF parsing through `gemmi`.
-- Pure-Python implementations of Kabsch alignment, RMSD metrics, interface residue detection, Fnat, DockQ, lDDT-Cα, and an approximate internal clash metric.
-- Optional sequence-based residue matching fallback when residue numbering does not line up well.
-- Parallel evaluation over a manifest CSV with structured failure reporting.
-- Explicit mapping diagnostics and row status fields so low-confidence mappings are visible instead of silently accepted.
-- Optional validation output against the official DockQ executable when it is available.
+- binary complexes with explicit receptor/ligand chain splits
+- multimer complexes when the manifest defines ordered chain groups
+- PDB and mmCIF inputs
+- strict mapping diagnostics, structured row status fields, and optional external DockQ validation
 
-## Research Safety
+## What This Evaluator Is Safe For
 
-This evaluator is safest for:
+Recommended use cases:
 
-- binary complexes with a clear receptor/ligand split
-- structures with consistent chain partitioning between prediction and native reference
-- cases where residue numbering is mostly consistent or sequence fallback is known to be appropriate
-- batch evaluation workflows where rows with `status != success` are filtered out
+- binary docking or binder-design evaluation with a clear receptor/ligand split
+- multimer evaluation where chain-group correspondence is known and provided explicitly in the manifest
+- batch experiments where rows with `status != success` are filtered out before reporting metrics
+- regression testing and large-scale sweeps where deterministic failure visibility matters
 
-This evaluator is not yet fully validated for:
+Not yet fully validated for:
 
-- ambiguous multi-chain partner remapping beyond the manifest-provided binary split
-- highly symmetric complexes where multiple chain assignments are equally plausible
-- exact equivalence with every external metric implementation in all edge cases
-- use as the only source of truth in a paper without checking mapping diagnostics and, ideally, external validation
+- automatic permutation resolution in highly symmetric multimers
+- ambiguous chain remapping without user-provided group order
+- exact equivalence to every external metric implementation on every edge case
+- paper-ready reporting without checking mapping diagnostics and, ideally, external validation on a benchmark subset
 
 ## Installation
+
+Python 3.10+ is required.
+
+Standard installation:
 
 ```bash
 cd protein_evaluation
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+pip install -e .
 ```
 
-Python 3.10+ is required.
-
-For reproducible experiments, prefer the exact tested dependency set:
+Reproducible installation using the tested dependency set:
 
 ```bash
 pip install -r requirements-pinned.txt
+pip install -e .
 ```
 
-Repository policy:
+Package entry points:
 
-- `requirements.txt`: supported version ranges for general installation
-- `requirements-pinned.txt`: exact versions used for deterministic experiment reruns and regression reproduction
+- module form: `python -m complex_eval.cli`
+- console script form: `complex-eval`
+
+Dependency policy:
+
+- `requirements.txt`: supported version ranges
+- `requirements-pinned.txt`: exact versions used for regression-tested reruns
+- `pyproject.toml`: package metadata and console entry point
 
 ## Package Layout
 
 ```text
 complex_eval/
   __init__.py
-  io_utils.py
-  align.py
-  metrics.py
-  evaluate.py
   aggregate.py
+  align.py
   cli.py
+  evaluate.py
+  io_utils.py
+  metrics.py
+  multimer.py
+  validation.py
 tests/
+  fixtures/
   test_metrics.py
-requirements.txt
-README.md
+  test_multimer.py
+  test_regression.py
+  test_safety.py
+  test_validation.py
 ```
 
-## Manifest Format
+## Manifest Formats
 
-The input manifest must be a CSV with these columns:
+All manifests require:
 
 - `sample_id`
 - `target_id`
 - `rank`
 - `pred_path`
 - `gt_path`
+
+### Legacy Binary Manifest
+
+Use these columns for receptor/ligand evaluation:
+
 - `pred_receptor_chains`
 - `pred_ligand_chains`
 - `gt_receptor_chains`
@@ -89,72 +106,119 @@ T001_r1,T001,1,preds/T001_rank1.pdb,gts/T001_native.cif,"A","B","A","B"
 T002_r3,T002,3,preds/T002_rank3.cif,gts/T002_native.pdb,"A,B","C,D","X,Y","Z,W"
 ```
 
-Chain columns may contain comma-separated IDs. Relative structure paths are resolved relative to the manifest directory.
+### Multimer Group Manifest
+
+Use these columns when the complex contains more than two manifest-defined partners:
+
+- `pred_chain_groups`
+- `gt_chain_groups`
+
+Format:
+
+- groups are separated by `|`
+- chain IDs inside a group are separated by `,`
+
+Example:
+
+```csv
+sample_id,target_id,rank,pred_path,gt_path,pred_chain_groups,gt_chain_groups
+M001_r1,M001,1,preds/M001_rank1.pdb,gts/M001_native.cif,"A,B|C|D,E","A,B|C|D,E"
+```
+
+Interpretation:
+
+- group 1 is `A,B`
+- group 2 is `C`
+- group 3 is `D,E`
+
+Important:
+
+- group order is trusted input
+- `complex_eval` does not attempt global multimer chain permutation search
+- if exactly two groups are provided, the evaluator uses the binary metric path
 
 ## Usage
 
-Basic evaluation:
+Basic strict evaluation:
 
 ```bash
-python -m complex_eval.cli \
+complex-eval \
   --manifest manifest.csv \
   --out_dir results \
   --topk 5 \
   --workers 8
 ```
 
-The CLI now defaults to strict mapping mode. Rows with low-confidence residue or chain mappings are marked as `status=low_confidence_mapping`, excluded from summaries by default, and cause a non-zero exit code in strict mode.
-
-Enable sequence-based residue matching fallback explicitly:
+Equivalent module invocation:
 
 ```bash
 python -m complex_eval.cli \
   --manifest manifest.csv \
+  --out_dir results
+```
+
+Enable sequence-based residue matching fallback:
+
+```bash
+complex-eval \
+  --manifest manifest.csv \
   --out_dir results \
-  --workers 4 \
   --sequence_fallback
 ```
 
-Disable strict mapping if you want to inspect low-confidence rows without failing the run:
+Inspect low-confidence rows without failing the run:
 
 ```bash
-python -m complex_eval.cli \
+complex-eval \
   --manifest manifest.csv \
   --out_dir results \
-  --sequence_fallback \
   --no-strict_mapping
 ```
 
-Include failed rows in `per_sample_metrics.csv` and opt in to summaries that include invalid rows:
+Tune mapping thresholds:
 
 ```bash
-python -m complex_eval.cli \
+complex-eval \
   --manifest manifest.csv \
   --out_dir results \
-  --include_failed_rows \
+  --min_matched_residue_fraction 0.85 \
+  --min_sequence_identity 0.70 \
+  --max_chain_length_difference 5
+```
+
+Include failed rows in `per_sample_metrics.csv`:
+
+```bash
+complex-eval \
+  --manifest manifest.csv \
+  --out_dir results \
+  --include_failed_rows
+```
+
+Include invalid rows in summaries:
+
+```bash
+complex-eval \
+  --manifest manifest.csv \
+  --out_dir results \
   --include_invalid_rows_in_summary
 ```
 
-Run external validation against DockQ when the executable is installed:
+Validate against the official DockQ executable when it is installed:
 
 ```bash
-python -m complex_eval.cli \
+complex-eval \
   --manifest manifest.csv \
   --out_dir results \
   --validation_mode dockq \
   --dockq_executable DockQ
 ```
 
-Disable optional expensive metrics if needed:
+Notes on validation mode:
 
-```bash
-python -m complex_eval.cli \
-  --manifest manifest.csv \
-  --out_dir results \
-  --no-include_all_atom_rmsd \
-  --no-include_lddt \
-  --no-include_clashes
-```
+- the repository degrades gracefully when DockQ is unavailable
+- current external DockQ validation is limited to binary one-chain-per-side rows
+- validation outputs are written separately and never silently replace internal metrics
 
 ## Outputs
 
@@ -168,23 +232,47 @@ The CLI writes:
 - `results/validation_dockq_per_sample.csv` when `--validation_mode dockq`
 - `results/validation_dockq_summary.json` when `--validation_mode dockq`
 
-### Per-sample CSV columns
+### Fields You Must Check Before Using Results In A Paper
 
-Representative columns include:
+At minimum, check:
+
+- `status == success`
+- `mapping_low_confidence_reasons` is empty
+- `matched_residue_fraction` is high enough for the benchmark
+- `mapping_confidence_score` is not suspiciously low
+- `parse_warning` is empty or explicitly reviewed
+
+Recommended filtering criteria for binary studies:
+
+- `status == success`
+- `matched_residue_fraction >= 0.8`
+- `receptor_min_chain_sequence_identity >= 0.7`
+- `ligand_min_chain_sequence_identity >= 0.7`
+- no positional multi-chain mapping unless manually reviewed
+
+Recommended filtering criteria for multimer studies:
+
+- `status == success`
+- `group_min_matched_residue_fraction >= 0.8`
+- `group_min_chain_sequence_identity >= 0.7`
+- `group_used_positional_chain_mapping_any == False`
+- inspect `pairwise_interface_metrics_json` for the benchmark subset used in reporting
+
+### Key Per-sample Columns
+
+Common fields:
 
 - `sample_id`
 - `target_id`
 - `rank`
+- `evaluation_mode`
 - `status`
 - `error_type`
 - `error_message`
 - `mapping_low_confidence_reasons`
 - `ca_rmsd`
 - `all_atom_rmsd`
-- `irmsd`
-- `lrmsd`
 - `fnat`
-- `dockq`
 - `lddt_ca`
 - `clash_count`
 - `clashes_per_1000_atoms`
@@ -192,6 +280,12 @@ Representative columns include:
 - `matched_atom_fraction`
 - `num_matched_residues`
 - `num_matched_atoms`
+- `mapping_confidence_score`
+- `used_sequence_fallback`
+- `parse_warning`
+
+Binary-specific mapping diagnostics include:
+
 - `receptor_num_matched_residues`
 - `ligand_num_matched_residues`
 - `receptor_num_unmatched_gt_residues`
@@ -204,97 +298,118 @@ Representative columns include:
 - `ligand_chain_mapping_strategy`
 - `receptor_used_positional_chain_mapping`
 - `ligand_used_positional_chain_mapping`
-- `used_sequence_fallback`
-- `used_ca_fallback_for_irmsd`
-- `used_ca_fallback_for_lrmsd`
-- `parse_warning`
+- `dockq`
+- `irmsd`
+- `lrmsd`
+
+True multimer-specific fields include:
+
+- `num_chain_groups`
+- `pairwise_interface_count`
+- `pairwise_interfaces_with_native_contacts`
+- `pairwise_fnat_mean`
+- `pairwise_irmsd_mean`
+- `pairwise_lrmsd_mean`
+- `pairwise_dockq_mean`
+- `pairwise_dockq_min`
+- `pairwise_dockq_acceptable_fraction`
+- `pairwise_interface_metrics_json`
+- `group_min_matched_residue_fraction`
+- `group_min_chain_sequence_identity`
+- `group_max_chain_length_difference`
+- `group_used_positional_chain_mapping_any`
+- `group_mapping_summary`
+
+Important multimer safety behavior:
+
+- for `evaluation_mode=multimer`, `dockq`, `irmsd`, and `lrmsd` are intentionally left as `NaN`
+- use `pairwise_*` fields instead
 
 ## Metric Definitions
 
-- `ca_rmsd`: global Cα RMSD after optimal rigid superposition over matched residues across the whole complex.
-- `all_atom_rmsd`: all-heavy-atom RMSD using matched residue/atom names. Hydrogens are ignored by default.
-- Native interface residues: residues in the ground-truth receptor or ligand that have any heavy atom within `10.0 Å` of the opposite partner.
-- `irmsd`: interface RMSD on interface backbone atoms (`N`, `CA`, `C`, `O`). Falls back to `CA` when backbone coverage is too poor.
-- `lrmsd`: ligand RMSD after superposing the predicted receptor onto the native receptor using receptor backbone atoms, with `CA` fallback if needed.
-- `fnat`: fraction of native residue-residue contacts recovered by the prediction, where a contact is any heavy-atom pair within `5.0 Å`.
-- `dockq`: internal DockQ implementation:
+### Global Metrics
 
-  ```text
-  DockQ = (Fnat + 1 / (1 + (iRMSD / 1.5)^2) + 1 / (1 + (LRMSD / 8.5)^2)) / 3
-  ```
+- `ca_rmsd`: global Cα RMSD after optimal rigid superposition over matched residues
+- `all_atom_rmsd`: all-heavy-atom RMSD using matched residues and atom names
+- `lddt_ca`: Cα-based lDDT using native pairs within `15.0 Å`
+- `clash_count`: internal approximate heavy-atom clash count
+- `clashes_per_1000_atoms`: `1000 * clash_count / num_heavy_atoms`
 
-- `lddt_ca`: Cα-based lDDT using native Cα pairs within `15.0 Å` and thresholds `0.5`, `1.0`, `2.0`, and `4.0 Å`.
-- `clash_count`: approximate heavy-atom clash count using element-based van der Waals radii and simple bonded-neighbor exclusions.
-- `clashes_per_1000_atoms`: `1000 * clash_count / num_heavy_atoms`.
+### Binary Interface Metrics
+
+- native interface residues: residues with any heavy atom within `10.0 Å` of the opposite partner
+- `irmsd`: interface backbone RMSD using `N`, `CA`, `C`, `O`, with `CA` fallback if needed
+- `lrmsd`: ligand RMSD after receptor superposition
+- `fnat`: fraction of native residue-residue contacts recovered, with a heavy-atom cutoff of `5.0 Å`
+- `dockq`: internal DockQ implementation
+
+```text
+DockQ = (Fnat + 1 / (1 + (iRMSD / 1.5)^2) + 1 / (1 + (LRMSD / 8.5)^2)) / 3
+```
+
+### Multimer Interface Metrics
+
+For `evaluation_mode=multimer`:
+
+- full-complex metrics are computed across all manifest-defined groups together
+- interface metrics are computed pairwise for every unique group pair
+- `fnat` is reported as the recovered fraction across all pairwise native contacts
+- `dockq`, `irmsd`, and `lrmsd` are not collapsed into a single scalar because that behavior is not validated here
 
 ## Aggregation
 
-- `summary_top1.json` summarizes the top-ranked sample per target.
-- `summary_best_of_k.json` summarizes the best sample per target among rows with `rank <= topk`.
-- `per_target_best_of_k.csv` stores the selected best-of-k row per target.
-- By default, summaries exclude rows whose `status` is not `success`.
+- `summary_top1.json` summarizes the top-ranked row per target
+- `summary_best_of_k.json` summarizes the best row among `rank <= topk`
+- by default, summaries exclude rows whose `status` is not `success`
 
-Best-of-k selection uses:
+Selection behavior:
 
-1. highest `dockq`
-2. highest `fnat`
-3. lowest `irmsd`
-4. lowest `rank`
+- binary rows are ranked by `dockq`, then `fnat`, then `irmsd`, then `rank`
+- multimer rows fall back to `pairwise_dockq_mean`, then `pairwise_fnat_mean`, then `pairwise_irmsd_mean`, then `rank`
 
-Each JSON summary includes:
+## External Validation
 
-- `count`
-- per-metric `mean`, `median`, `std`, `min`, `max`
-- DockQ success rates for `>= 0.23`, `>= 0.49`, `>= 0.80`
-- iRMSD success rate for `<= 2.0`
-- average `lddt_ca`
-- average `clash_count`
-- average `clashes_per_1000_atoms`
+When `--validation_mode dockq` is enabled and the DockQ executable is available:
 
-## Assumptions and Limitations
+- internal vs external metrics are compared per sample
+- per-sample diffs are written to CSV
+- summary JSON includes mean/max absolute diffs
+- Pearson and Spearman correlations are reported when enough rows exist
+- explicit pass/fail thresholds are written to the summary
 
-- This first version supports binary complex evaluation only: receptor vs ligand.
-- Each side may contain multiple chains, but true multimer interface assignment beyond a binary split is out of scope.
-- If predicted and native chain identifiers differ, chains are matched by manifest order unless the chain ID sets are identical. Multi-chain positional remapping is flagged as low-confidence.
-- Residue matching first uses `(chain mapping, residue number, insertion code, residue name)`. Sequence fallback is optional and may reduce effective coverage if the sequences are not cleanly alignable.
-- Alternate locations are reduced to the highest-occupancy altloc per atom name.
-- Hydrogens are ignored by default.
-- Missing atoms and unmatched residues reduce coverage metrics and may trigger `CA` fallback in backbone-based metrics.
-- The internal clash metric is an approximation. It is not an exact MolProbity clashscore and should not be interpreted as one.
-- DockQ validation is optional and currently limited to one-chain-per-side comparisons unless you extend the wrapper for more complex chain-group mappings.
-- External tools such as DockQ or MolProbity are not required and are not used by default.
+If DockQ is unavailable:
 
-## Recommended Filtering For Papers
+- validation summary status is set to `unavailable`
+- evaluation results are still written
+- the repository does not silently invent reference values
 
-Before using any row in a figure, table, or benchmark summary, check at minimum:
+## Assumptions And Limitations
 
-- `status == success`
-- `matched_residue_fraction` is high enough for your benchmark
-- `receptor_matched_residue_fraction` and `ligand_matched_residue_fraction` are both acceptable
-- `receptor_min_chain_sequence_identity` and `ligand_min_chain_sequence_identity` are acceptable when sequence fallback was used
-- `parse_warning` and `mapping_low_confidence_reasons` are empty
+- chain-group order is part of the scientific input and must be provided correctly
+- alternate locations are reduced to the highest-occupancy altloc per atom name
+- hydrogens are ignored by default
+- sequence fallback can improve coverage for numbering offsets but may hide bad manifests if used indiscriminately
+- internal clash metrics are approximations and are not MolProbity clashscores
+- external validation currently targets binary one-chain-per-side DockQ comparisons only
+- true symmetry-aware multimer chain permutation search is out of scope for this repository
 
-A conservative starting filter is:
+## Development And Testing
 
-```text
-status == success
-matched_residue_fraction >= 0.90
-receptor_matched_residue_fraction >= 0.90
-ligand_matched_residue_fraction >= 0.90
-```
-
-If DockQ is available, also inspect `validation_dockq_summary.json` and the per-sample diff file before using the evaluator as a benchmark source in a paper.
-
-## Additional Documentation
-
-- `docs/engineering_report.md`
-
-## Running Tests
+Run the full CPU test suite:
 
 ```bash
-cd protein_evaluation
 python -m unittest discover -s tests -v
 ```
+
+Build and install the package locally:
+
+```bash
+python -m pip install --upgrade pip
+pip install -r requirements-pinned.txt
+pip install -e .
+```
+
+The GitHub Actions workflow installs the pinned dependency set and then installs the package through `pyproject.toml` before running tests.
 
 ## License
 
